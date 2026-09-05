@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Positions</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html">Player Search</a>
+      <a href="positions.html" class="active">Positions</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Runs by Batting Position</h1>
+  <p class="page-lede">Runs scored from each position in the order (1, 2, 3…), broken down by venue, with a total across all venues. Leave the player field blank for league-wide totals, or search a name for just their numbers. Position 0 (didn't bat) is excluded. Click a column to sort.</p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
+    <div id="position-table"><p class="loading-note">Loading…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const tableEl = document.getElementById('position-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let matchRows = [];
+  try {
+    matchRows = await loadCSV(DATA.matchlog);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load the match log.</p>';
+    console.error(e);
+    return;
+  }
+
+  const formats = uniqueSorted(matchRows, 'format');
+
+  function render(filters) {
+    let rows = matchRows;
+    if (filters.format && filters.format !== 'All') rows = rows.filter(r => r.format === filters.format);
+    if (filters.search) rows = rows.filter(r => nameMatches(r.player, filters.search));
+
+    const { venues, table } = aggregatePositionByVenueMatrix(rows);
+
+    if (!table.length) {
+      tableEl.innerHTML = '<p class="empty-state">No qualifying innings for this filter.</p>';
+      return;
+    }
+
+    const cols = [
+      { key: 'position', label: 'Position', num: true },
+      ...venues.map(v => ({ key: v, label: v, num: true })),
+      { key: 'total', label: 'Total', num: true },
+    ];
+
+    noteEl.textContent = filters.search
+      ? `Showing ${filters.search}'s runs by position and venue.`
+      : 'Showing league-wide runs by position and venue, across every logged player.';
+
+    renderSortableTable(tableEl, cols, table, 'position', 'asc');
+  }
+
+  buildFilterBar(filterBarEl, {
+    formats,
+    withFormat: true, withVenue: false, withOpponent: false,
+    withSearch: true, withMinMatches: false,
+    searchLabel: 'Search player (optional)',
+    searchPlaceholder: 'blank = whole league',
+  }, render);
+
+  render({ format: 'All', search: '' });
+})();
+</script>
+
+</body>
+</html>

@@ -17,8 +17,9 @@ from the CSV files in `/data` — there is no build step and no database.
 - `player.html` — search any player for career stats, recent form, and venue
   splits, plus their milestone totals — filterable by format, opponent and
   a min-matches threshold on the venue-split table
-- `insights.html` — deeper analysis: batting position vs venue (which part
-  of the order scores where), and a "most consistent batter" ranking
+- `positions.html` — runs by batting position (1-11) crossed with venue,
+  with a total column across all venues — league-wide, or scoped to one
+  player via the (optional) player search filter
 
 (The old `venues.html` page was removed — it was the one causing pages to
 hang on load.)

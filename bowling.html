@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Bowling</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html" class="active">Bowling</a>
+      <a href="player.html">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>All-Time Bowling</h1>
+  <p class="page-lede">Career wicket and economy totals across every format logged. Click a column to sort.</p>
+
+  <div class="card">
+    <div id="bowling-table"><p class="loading-note">Loading bowling stats…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const container = document.getElementById('bowling-table');
+  try {
+    const raw = await loadCSV(DATA.bowling);
+
+    const cols = [
+      { key: 'name', label: 'Player' },
+      { key: 'format', label: 'Format' },
+      { key: 'wickets', label: 'Wkts', num: true },
+      {
+        key: 'overs', label: 'Overs', num: true,
+        format: (v) => Number(v).toFixed(1),
+      },
+      { key: 'runs_conceded', label: 'Runs', num: true },
+      {
+        key: 'economy', label: 'Econ', num: true,
+        format: (v) => v.toFixed(2),
+      },
+      { key: 'matches', label: 'M', num: true },
+    ];
+
+    const rows = raw
+      .filter(r => r.name && r.wickets > 0)
+      .map(r => ({
+        ...r,
+        economy: r.overs > 0 ? r.runs_conceded / r.overs : 0,
+      }));
+
+    rows.sort((a, b) => b.wickets - a.wickets);
+
+    renderSortableTable(container, cols, rows, 'wickets', 'desc');
+  } catch (e) {
+    container.innerHTML = '<p class="empty-state">Could not load bowling stats. Check that data/league_bowling_stats_alltime.csv exists.</p>';
+    console.error(e);
+  }
+})();
+</script>
+
+</body>
+</html>

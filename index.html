@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Points Table</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html" class="active">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="player.html">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Points Table</h1>
+  <p class="page-lede">Standings across the season, ranked by points then net run rate.</p>
+
+  <div class="card">
+    <div id="points-table"><p class="loading-note">Loading standings…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const container = document.getElementById('points-table');
+  try {
+    const rows = await loadCSV(DATA.points);
+
+    const cols = [
+      { key: 'team', label: 'Team' },
+      { key: 'matches', label: 'M', num: true },
+      { key: 'wins', label: 'W', num: true },
+      { key: 'losses', label: 'L', num: true },
+      { key: 'points', label: 'Pts', num: true },
+      {
+        key: 'nrr', label: 'NRR', num: true,
+        format: (v) => (v > 0 ? '+' : '') + Number(v).toFixed(2),
+        cellClass: (row) => (row.nrr >= 0 ? 'pos-nrr' : 'neg-nrr'),
+      },
+    ];
+
+    // default sort: points desc, then nrr desc as tiebreak
+    rows.sort((a, b) => (b.points - a.points) || (b.nrr - a.nrr));
+
+    renderSortableTable(container, cols, rows, 'points', 'desc');
+  } catch (e) {
+    container.innerHTML = '<p class="empty-state">Could not load the points table. Check that data/points_league_nrr.csv exists.</p>';
+    console.error(e);
+  }
+})();
+</script>
+
+</body>
+</html>

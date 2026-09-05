@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Batting</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html" class="active">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="player.html">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>All-Time Batting</h1>
+  <p class="page-lede">Career run totals across every format logged. Click a column to sort.</p>
+
+  <div class="card">
+    <div id="batting-table"><p class="loading-note">Loading batting stats…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const container = document.getElementById('batting-table');
+  try {
+    const raw = await loadCSV(DATA.batting);
+
+    const cols = [
+      { key: 'name', label: 'Player' },
+      { key: 'format', label: 'Format' },
+      { key: 'runs', label: 'Runs', num: true },
+      { key: 'balls', label: 'Balls', num: true },
+      {
+        key: 'strike_rate', label: 'SR', num: true,
+        format: (v) => v.toFixed(2),
+      },
+      { key: 'matches', label: 'M', num: true },
+      { key: 'innings', label: 'Inn', num: true },
+      {
+        key: 'avg_runs', label: 'Avg/Inn', num: true,
+        format: (v) => v.toFixed(1),
+      },
+    ];
+
+    const rows = raw
+      .filter(r => r.name)
+      .map(r => ({
+        ...r,
+        strike_rate: r.balls > 0 ? (r.runs / r.balls) * 100 : 0,
+        avg_runs: r.innings > 0 ? r.runs / r.innings : 0,
+      }));
+
+    rows.sort((a, b) => b.runs - a.runs);
+
+    renderSortableTable(container, cols, rows, 'runs', 'desc');
+  } catch (e) {
+    container.innerHTML = '<p class="empty-state">Could not load batting stats. Check that data/league_batting_stats_alltime.csv exists.</p>';
+    console.error(e);
+  }
+})();
+</script>
+
+</body>
+</html>

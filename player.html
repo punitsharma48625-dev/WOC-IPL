@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Player Search</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="player.html" class="active">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Player Search</h1>
+  <p class="page-lede">Type any part of a name — matches, career totals, and recent form.</p>
+
+  <div class="search-box">
+    <input type="text" id="search-input" placeholder="e.g. kohli, pandya, mhatre…" autocomplete="off">
+  </div>
+  <p class="search-hint" id="search-hint">Loading player data…</p>
+
+  <ul class="match-list" id="match-list"></ul>
+
+  <div id="player-card"></div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+let battingRows = [];
+let bowlingRows = [];
+let matchRows = [];
+let allNames = [];
+
+async function init() {
+  const hint = document.getElementById('search-hint');
+  try {
+    [battingRows, bowlingRows, matchRows] = await Promise.all([
+      loadCSV(DATA.batting),
+      loadCSV(DATA.bowling),
+      loadCSV(DATA.matchlog),
+    ]);
+
+    const nameSet = new Set();
+    battingRows.forEach(r => r.name && nameSet.add(r.name));
+    bowlingRows.forEach(r => r.name && nameSet.add(r.name));
+    matchRows.forEach(r => r.player && nameSet.add(r.player));
+    allNames = [...nameSet].sort();
+
+    hint.textContent = `${allNames.length} players loaded. Start typing to search.`;
+  } catch (e) {
+    hint.textContent = 'Could not load player data — check the /data folder.';
+    console.error(e);
+  }
+}
+
+function showMatches(term) {
+  const list = document.getElementById('match-list');
+  list.innerHTML = '';
+  if (!term) return;
+
+  const matches = allNames.filter(n => nameMatches(n, term)).slice(0, 15);
+  if (matches.length === 0) {
+    list.innerHTML = '<li class="empty-state">No players found.</li>';
+    return;
+  }
+
+  matches.forEach(name => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="mname">${name}</span>`;
+    li.addEventListener('click', () => renderPlayer(name));
+    list.appendChild(li);
+  });
+
+  // auto-render if there's exactly one match
+  if (matches.length === 1) renderPlayer(matches[0]);
+}
+
+function renderPlayer(name) {
+  document.getElementById('match-list').innerHTML = '';
+  document.getElementById('search-input').value = name;
+
+  const bat = battingRows.filter(r => r.name === name);
+  const bowl = bowlingRows.filter(r => r.name === name);
+  const recent = matchRows
+    .filter(r => r.player === name)
+    .map(r => ({ ...r, _ts: matchTimestamp(r) }))
+    .sort((a, b) => b._ts - a._ts)
+    .slice(0, 10);
+
+  const formats = [...new Set([...bat.map(r => r.format), ...bowl.map(r => r.format)])];
+
+  const battingStats = bat.map(r => {
+    const sr = r.balls > 0 ? (r.runs / r.balls) * 100 : 0;
+    const avg = r.innings > 0 ? r.runs / r.innings : 0;
+    return `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${r.runs}</div><div class="stat-label">Runs (${r.format})</div></div>
+        <div class="stat"><div class="stat-value">${sr.toFixed(1)}</div><div class="stat-label">Strike rate</div></div>
+        <div class="stat"><div class="stat-value">${avg.toFixed(1)}</div><div class="stat-label">Runs / innings</div></div>
+        <div class="stat"><div class="stat-value">${r.matches}</div><div class="stat-label">Matches</div></div>
+        <div class="stat"><div class="stat-value">${r.innings}</div><div class="stat-label">Innings</div></div>
+      </div>`;
+  }).join('');
+
+  const bowlingStats = bowl.filter(r => r.wickets > 0 || r.matches > 0).map(r => {
+    const econ = r.overs > 0 ? r.runs_conceded / r.overs : 0;
+    return `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${r.wickets}</div><div class="stat-label">Wickets (${r.format})</div></div>
+        <div class="stat"><div class="stat-value">${econ.toFixed(2)}</div><div class="stat-label">Economy</div></div>
+        <div class="stat"><div class="stat-value">${Number(r.overs).toFixed(1)}</div><div class="stat-label">Overs</div></div>
+        <div class="stat"><div class="stat-value">${r.runs_conceded}</div><div class="stat-label">Runs conceded</div></div>
+        <div class="stat"><div class="stat-value">${r.matches}</div><div class="stat-label">Matches</div></div>
+      </div>`;
+  }).join('');
+
+  const recentRows = recent.map(r => {
+    const roleBits = [];
+    if (r.runs !== '' && r.runs !== null && r.balls > 0) {
+      roleBits.push(`${r.runs} (${r.balls})${r.out === 'No' ? '*' : ''}`);
+    }
+    if (r.wickets > 0 || r.overs > 0) {
+      roleBits.push(`${r.wickets}/${r.runs_conceded} in ${Number(r.overs).toFixed(1)} ov`);
+    }
+    return `
+      <tr>
+        <td>${readableDate(r._ts)}</td>
+        <td>${r.team} vs ${r.opponent}</td>
+        <td>${r.format}</td>
+        <td>${roleBits.join(' · ') || '—'}</td>
+        <td class="num">${r.fantasy_points ?? '—'}</td>
+      </tr>`;
+  }).join('');
+
+  const card = document.getElementById('player-card');
+  card.innerHTML = `
+    <div class="card">
+      <div class="player-head">
+        <h2>${name}</h2>
+        <div class="formats">${formats.join(' · ') || ''}</div>
+      </div>
+
+      ${battingStats ? `<div class="section-label">Career batting</div>${battingStats}` : ''}
+      ${bowlingStats ? `<div class="section-label">Career bowling</div>${bowlingStats}` : ''}
+
+      <div class="section-label">Recent matches</div>
+      ${recent.length ? `
+        <table>
+          <thead><tr><th>Date</th><th>Match</th><th>Format</th><th>Performance</th><th class="num">Fantasy pts</th></tr></thead>
+          <tbody>${recentRows}</tbody>
+        </table>
+      ` : '<p class="empty-state">No logged matches found for this player.</p>'}
+    </div>
+  `;
+}
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  showMatches(e.target.value.trim());
+});
+
+init();
+</script>
+
+</body>
+</html>

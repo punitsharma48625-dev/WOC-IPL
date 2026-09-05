@@ -16,6 +16,7 @@
       <a href="index.html">Points Table</a>
       <a href="batting.html">Batting</a>
       <a href="bowling.html">Bowling</a>
+      <a href="venues.html">Venues</a>
       <a href="player.html" class="active">Player Search</a>
     </nav>
   </div>
@@ -145,6 +146,29 @@ function renderPlayer(name) {
       </tr>`;
   }).join('');
 
+  // Venue split, built live from every logged row for this player.
+  const allPlayerRows = matchRows.filter(r => r.player === name);
+  const byVenue = aggregateByGroup(allPlayerRows, 'venue').slice(0, 10);
+
+  function splitTable(groups, emptyMsg) {
+    if (!groups.length) return `<p class="empty-state">${emptyMsg}</p>`;
+    const rows = groups.map(g => `
+      <tr>
+        <td>${g.group}</td>
+        <td class="num">${g.matches}</td>
+        <td class="num">${g.innings ? g.runs : '—'}</td>
+        <td class="num">${g.innings ? g.average.toFixed(1) : '—'}</td>
+        <td class="num">${g.balls ? g.strike_rate.toFixed(1) : '—'}</td>
+        <td class="num">${g.wickets ? g.wickets : '—'}</td>
+        <td class="num">${g.overs ? g.economy.toFixed(2) : '—'}</td>
+      </tr>`).join('');
+    return `
+      <table>
+        <thead><tr><th></th><th class="num">M</th><th class="num">Runs</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
   const card = document.getElementById('player-card');
   card.innerHTML = `
     <div class="card">
@@ -163,6 +187,9 @@ function renderPlayer(name) {
           <tbody>${recentRows}</tbody>
         </table>
       ` : '<p class="empty-state">No logged matches found for this player.</p>'}
+
+      <div class="section-label">By venue <span class="section-note">(top 10 by matches — scout home grounds and weak spots)</span></div>
+      ${splitTable(byVenue, 'No venue data logged for this player.')}
     </div>
   `;
 }

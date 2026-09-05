@@ -16,6 +16,7 @@
       <a href="index.html">Points Table</a>
       <a href="batting.html" class="active">Batting</a>
       <a href="bowling.html">Bowling</a>
+      <a href="venues.html">Venues</a>
       <a href="player.html">Player Search</a>
     </nav>
   </div>
@@ -23,9 +24,11 @@
 
 <main>
   <h1>All-Time Batting</h1>
-  <p class="page-lede">Career run totals across every format logged. Click a column to sort.</p>
+  <p class="page-lede">Career run totals, filterable by format, venue and opponent. Click a column to sort.</p>
 
   <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
     <div id="batting-table"><p class="loading-note">Loading batting stats…</p></div>
   </div>
 </main>
@@ -35,42 +38,78 @@
 <script src="app.js"></script>
 <script>
 (async function () {
-  const container = document.getElementById('batting-table');
+  const tableEl = document.getElementById('batting-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let alltimeRows = [];
+  let matchRows = [];
+
   try {
-    const raw = await loadCSV(DATA.batting);
+    [alltimeRows, matchRows] = await Promise.all([
+      loadCSV(DATA.batting),
+      loadCSV(DATA.matchlog),
+    ]);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load batting data. Check the /data folder.</p>';
+    console.error(e);
+    return;
+  }
 
-    const cols = [
-      { key: 'name', label: 'Player' },
-      { key: 'format', label: 'Format' },
-      { key: 'runs', label: 'Runs', num: true },
-      { key: 'balls', label: 'Balls', num: true },
-      {
-        key: 'strike_rate', label: 'SR', num: true,
-        format: (v) => v.toFixed(2),
-      },
-      { key: 'matches', label: 'M', num: true },
-      { key: 'innings', label: 'Inn', num: true },
-      {
-        key: 'avg_runs', label: 'Avg/Inn', num: true,
-        format: (v) => v.toFixed(1),
-      },
-    ];
+  const formats = uniqueSorted(matchRows, 'format').length
+    ? uniqueSorted(matchRows, 'format')
+    : uniqueSorted(alltimeRows, 'format');
+  const venues = uniqueSorted(matchRows, 'venue');
 
-    const rows = raw
-      .filter(r => r.name)
-      .map(r => ({
-        ...r,
-        strike_rate: r.balls > 0 ? (r.runs / r.balls) * 100 : 0,
-        avg_runs: r.innings > 0 ? r.runs / r.innings : 0,
-      }));
+  const cols = [
+    { key: 'name', label: 'Player' },
+    { key: 'format', label: 'Format' },
+    { key: 'runs', label: 'Runs', num: true },
+    { key: 'balls', label: 'Balls', num: true },
+    { key: 'strike_rate', label: 'SR', num: true, format: (v) => v.toFixed(2) },
+    { key: 'matches', label: 'M', num: true },
+    { key: 'innings', label: 'Inn', num: true },
+    { key: 'average', label: 'Avg', num: true, format: (v) => v.toFixed(1) },
+  ];
+
+  function render(filters) {
+    const usingAllTotals = filters.venue === 'All';
+
+    let rows;
+    if (usingAllTotals) {
+      // official career totals, no dismissals data available here so
+      // "average" falls back to runs-per-innings like the old site did.
+      rows = alltimeRows
+        .filter(r => r.name)
+        .filter(r => !filters.format || filters.format === 'All' || r.format === filters.format)
+        .filter(r => !filters.search || nameMatches(r.name, filters.search))
+        .map(r => ({
+          ...r,
+          strike_rate: r.balls > 0 ? (r.runs / r.balls) * 100 : 0,
+          average: r.innings > 0 ? r.runs / r.innings : 0,
+        }));
+      noteEl.textContent = 'Showing official all-time totals (Avg here is runs per innings — outs aren\u2019t tracked in this file).';
+    } else {
+      const filtered = filterMatchRows(matchRows, filters);
+      rows = aggregateBatting(filtered);
+      noteEl.textContent = `Computed live from the match log (venue: ${filters.venue}) — Avg is runs per dismissal, and totals can differ slightly from the official all-time file.`;
+    }
+
+    if (filters.minMatches > 0) {
+      rows = rows.filter(r => r.matches >= filters.minMatches);
+    }
 
     rows.sort((a, b) => b.runs - a.runs);
-
-    renderSortableTable(container, cols, rows, 'runs', 'desc');
-  } catch (e) {
-    container.innerHTML = '<p class="empty-state">Could not load batting stats. Check that data/league_batting_stats_alltime.csv exists.</p>';
-    console.error(e);
+    renderSortableTable(tableEl, cols, rows, 'runs', 'desc');
   }
+
+  buildFilterBar(filterBarEl, {
+    formats, venues,
+    withFormat: true, withVenue: true, withOpponent: false,
+    withSearch: true, withMinMatches: true, minMatchesLabel: 'Min matches',
+  }, render);
+
+  render({ format: 'All', venue: 'All', search: '', minMatches: 0 });
 })();
 </script>
 

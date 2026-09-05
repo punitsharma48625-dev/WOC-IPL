@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Venues</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="venues.html" class="active">Venues</a>
+      <a href="player.html">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Venue Analysis</h1>
+  <p class="page-lede">Which grounds favour batting or bowling, and who's performed best at each — built from the match log so it stays in sync with every match logged.</p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+  </div>
+
+  <div id="venue-overview" class="card"><p class="loading-note">Loading venue data…</p></div>
+  <div id="venue-detail"></div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const overviewEl = document.getElementById('venue-overview');
+  const detailEl = document.getElementById('venue-detail');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let matchRows = [];
+  try {
+    matchRows = await loadCSV(DATA.matchlog);
+  } catch (e) {
+    overviewEl.innerHTML = '<p class="empty-state">Could not load the match log.</p>';
+    console.error(e);
+    return;
+  }
+
+  const formats = uniqueSorted(matchRows, 'format');
+
+  function venueSummaries(rows) {
+    const byVenue = new Map();
+    rows.forEach(r => {
+      if (!r.venue) return;
+      if (!byVenue.has(r.venue)) {
+        byVenue.set(r.venue, {
+          venue: r.venue, matchIds: new Set(),
+          runs: 0, balls: 0, wickets: 0,
+        });
+      }
+      const v = byVenue.get(r.venue);
+      v.matchIds.add(r.match_id);
+      v.runs += num(r.runs);
+      v.balls += num(r.balls);
+      const b = num(r.out === 'Yes' ? 1 : 0);
+      v.wickets += b;
+    });
+    return [...byVenue.values()].map(v => ({
+      venue: v.venue,
+      matches: v.matchIds.size,
+      runs: v.runs,
+      runRate: v.balls > 0 ? (v.runs / v.balls) * 6 : 0,
+      wicketsPerMatch: v.matchIds.size > 0 ? v.wickets / v.matchIds.size : 0,
+    })).sort((a, b) => b.matches - a.matches);
+  }
+
+  function topAtVenue(rows, venue) {
+    const venueRows = rows.filter(r => r.venue === venue);
+    const bat = aggregateBatting(venueRows)
+      .filter(p => p.balls >= 12)
+      .sort((a, b) => b.runs - a.runs)
+      .slice(0, 5);
+    const bowl = aggregateBowling(venueRows)
+      .filter(p => p.wickets > 0)
+      .sort((a, b) => b.wickets - a.wickets)
+      .slice(0, 5);
+    return { bat, bowl };
+  }
+
+  function render(filters) {
+    const rows = matchRows.filter(r =>
+      (!filters.format || filters.format === 'All' || r.format === filters.format));
+
+    const summaries = venueSummaries(rows);
+
+    const cols = [
+      { key: 'venue', label: 'Venue' },
+      { key: 'matches', label: 'Matches', num: true },
+      { key: 'runRate', label: 'Run rate', num: true, format: v => v.toFixed(2) },
+      { key: 'wicketsPerMatch', label: 'Wkts/match', num: true, format: v => v.toFixed(1) },
+    ];
+    renderSortableTable(overviewEl, cols, summaries, 'matches', 'desc');
+
+    detailEl.innerHTML = summaries.map(s => {
+      const { bat, bowl } = topAtVenue(rows, s.venue);
+      const batRows = bat.map(p => `<tr><td>${p.name}</td><td class="num">${p.runs}</td><td class="num">${p.strike_rate.toFixed(1)}</td><td class="num">${p.matches}</td></tr>`).join('')
+        || '<tr><td colspan="4" class="empty-state">No qualifying innings.</td></tr>';
+      const bowlRows = bowl.map(p => `<tr><td>${p.name}</td><td class="num">${p.wickets}</td><td class="num">${p.economy.toFixed(2)}</td><td class="num">${p.matches}</td></tr>`).join('')
+        || '<tr><td colspan="4" class="empty-state">No wickets logged.</td></tr>';
+      return `
+        <div class="card">
+          <h3>${s.venue}</h3>
+          <div class="venue-split">
+            <div>
+              <div class="section-label">Top run-scorers</div>
+              <table><thead><tr><th>Player</th><th class="num">Runs</th><th class="num">SR</th><th class="num">M</th></tr></thead><tbody>${batRows}</tbody></table>
+            </div>
+            <div>
+              <div class="section-label">Top wicket-takers</div>
+              <table><thead><tr><th>Player</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">M</th></tr></thead><tbody>${bowlRows}</tbody></table>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  buildFilterBar(filterBarEl, {
+    formats, withFormat: true, withVenue: false, withOpponent: false,
+    withSearch: false, withMinMatches: false,
+  }, render);
+
+  render({ format: 'All' });
+})();
+</script>
+
+</body>
+</html>

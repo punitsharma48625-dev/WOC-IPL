@@ -16,6 +16,7 @@
       <a href="index.html">Points Table</a>
       <a href="batting.html">Batting</a>
       <a href="bowling.html" class="active">Bowling</a>
+      <a href="venues.html">Venues</a>
       <a href="player.html">Player Search</a>
     </nav>
   </div>
@@ -23,9 +24,11 @@
 
 <main>
   <h1>All-Time Bowling</h1>
-  <p class="page-lede">Career wicket and economy totals across every format logged. Click a column to sort.</p>
+  <p class="page-lede">Career wicket and economy totals, filterable by format, venue and opponent. Click a column to sort.</p>
 
   <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
     <div id="bowling-table"><p class="loading-note">Loading bowling stats…</p></div>
   </div>
 </main>
@@ -35,40 +38,76 @@
 <script src="app.js"></script>
 <script>
 (async function () {
-  const container = document.getElementById('bowling-table');
+  const tableEl = document.getElementById('bowling-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let alltimeRows = [];
+  let matchRows = [];
+
   try {
-    const raw = await loadCSV(DATA.bowling);
+    [alltimeRows, matchRows] = await Promise.all([
+      loadCSV(DATA.bowling),
+      loadCSV(DATA.matchlog),
+    ]);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load bowling data. Check the /data folder.</p>';
+    console.error(e);
+    return;
+  }
 
-    const cols = [
-      { key: 'name', label: 'Player' },
-      { key: 'format', label: 'Format' },
-      { key: 'wickets', label: 'Wkts', num: true },
-      {
-        key: 'overs', label: 'Overs', num: true,
-        format: (v) => Number(v).toFixed(1),
-      },
-      { key: 'runs_conceded', label: 'Runs', num: true },
-      {
-        key: 'economy', label: 'Econ', num: true,
-        format: (v) => v.toFixed(2),
-      },
-      { key: 'matches', label: 'M', num: true },
-    ];
+  const formats = uniqueSorted(matchRows, 'format').length
+    ? uniqueSorted(matchRows, 'format')
+    : uniqueSorted(alltimeRows, 'format');
+  const venues = uniqueSorted(matchRows, 'venue');
 
-    const rows = raw
-      .filter(r => r.name && r.wickets > 0)
-      .map(r => ({
-        ...r,
-        economy: r.overs > 0 ? r.runs_conceded / r.overs : 0,
-      }));
+  const cols = [
+    { key: 'name', label: 'Player' },
+    { key: 'format', label: 'Format' },
+    { key: 'wickets', label: 'Wkts', num: true },
+    { key: 'overs', label: 'Overs', num: true, format: (v) => Number(v).toFixed(1) },
+    { key: 'runs_conceded', label: 'Runs', num: true },
+    { key: 'economy', label: 'Econ', num: true, format: (v) => v.toFixed(2) },
+    { key: 'bowling_average', label: 'Avg', num: true, format: (v) => (v > 0 ? v.toFixed(1) : '—') },
+    { key: 'matches', label: 'M', num: true },
+  ];
+
+  function render(filters) {
+    const usingAllTotals = filters.venue === 'All';
+
+    let rows;
+    if (usingAllTotals) {
+      rows = alltimeRows
+        .filter(r => r.name && r.wickets > 0)
+        .filter(r => !filters.format || filters.format === 'All' || r.format === filters.format)
+        .filter(r => !filters.search || nameMatches(r.name, filters.search))
+        .map(r => ({
+          ...r,
+          economy: r.overs > 0 ? r.runs_conceded / r.overs : 0,
+          bowling_average: r.wickets > 0 ? r.runs_conceded / r.wickets : 0,
+        }));
+      noteEl.textContent = 'Showing official all-time totals.';
+    } else {
+      const filtered = filterMatchRows(matchRows, filters);
+      rows = aggregateBowling(filtered).filter(r => r.wickets > 0);
+      noteEl.textContent = `Computed live from the match log (venue: ${filters.venue}) — totals can differ slightly from the official all-time file.`;
+    }
+
+    if (filters.minMatches > 0) {
+      rows = rows.filter(r => r.matches >= filters.minMatches);
+    }
 
     rows.sort((a, b) => b.wickets - a.wickets);
-
-    renderSortableTable(container, cols, rows, 'wickets', 'desc');
-  } catch (e) {
-    container.innerHTML = '<p class="empty-state">Could not load bowling stats. Check that data/league_bowling_stats_alltime.csv exists.</p>';
-    console.error(e);
+    renderSortableTable(tableEl, cols, rows, 'wickets', 'desc');
   }
+
+  buildFilterBar(filterBarEl, {
+    formats, venues,
+    withFormat: true, withVenue: true, withOpponent: false,
+    withSearch: true, withMinMatches: true, minMatchesLabel: 'Min matches',
+  }, render);
+
+  render({ format: 'All', venue: 'All', search: '', minMatches: 0 });
 })();
 </script>
 

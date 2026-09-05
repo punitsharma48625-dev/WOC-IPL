@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Insights</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html">Player Search</a>
+      <a href="insights.html" class="active">Insights</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Insights</h1>
+  <p class="page-lede">Deeper analysis built live from the match log — where in the order runs get scored at each ground, and who's most reliably near their own average.</p>
+
+  <div class="card">
+    <div class="section-label">Batting position vs venue <span class="section-note">(Top = positions 1–3, Middle = 4–6, Lower = 7–11)</span></div>
+    <p class="page-lede" style="margin-bottom:14px;">Pick a venue to see how each part of the order performs there, or leave it on "All venues" to compare grounds side by side.</p>
+    <div id="posvenue-filter-bar"></div>
+    <p class="filter-note" id="posvenue-note"></p>
+    <div id="posvenue-table"><p class="loading-note">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Most consistent batters <span class="section-note">(qualified players, ranked by lowest variance around their own average)</span></div>
+    <div id="consistency-filter-bar"></div>
+    <div id="consistency-table"><p class="loading-note">Loading…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const posVenueFilterEl = document.getElementById('posvenue-filter-bar');
+  const posVenueNoteEl = document.getElementById('posvenue-note');
+  const posVenueTableEl = document.getElementById('posvenue-table');
+  const consistencyFilterEl = document.getElementById('consistency-filter-bar');
+  const consistencyTableEl = document.getElementById('consistency-table');
+
+  let matchRows = [];
+  try {
+    matchRows = await loadCSV(DATA.matchlog);
+  } catch (e) {
+    [posVenueTableEl, consistencyTableEl].forEach(el => {
+      el.innerHTML = '<p class="empty-state">Could not load the match log.</p>';
+    });
+    console.error(e);
+    return;
+  }
+
+  const formats = uniqueSorted(matchRows, 'format');
+  const venues = uniqueSorted(matchRows, 'venue');
+
+  /* ---------- Position vs venue ---------- */
+  function fmtBucket(b) {
+    if (!b || !b.innings) return '—';
+    return `${b.average.toFixed(1)} avg · ${b.strike_rate.toFixed(1)} SR <span class="section-note">(${b.innings} inn)</span>`;
+  }
+
+  const posVenueCols = [
+    { key: 'venue', label: 'Venue' },
+    { key: 'top_disp', label: 'Top order (1-3)' },
+    { key: 'middle_disp', label: 'Middle order (4-6)' },
+    { key: 'lower_disp', label: 'Lower order (7-11)' },
+  ];
+
+  const positionCols = [
+    { key: 'position', label: 'Position', num: true },
+    { key: 'innings', label: 'Innings', num: true },
+    { key: 'runs', label: 'Runs', num: true },
+    { key: 'average', label: 'Avg', num: true, format: (v) => v.toFixed(1) },
+    { key: 'strike_rate', label: 'SR', num: true, format: (v) => v.toFixed(1) },
+  ];
+
+  function renderPosVenue(filters) {
+    let rows = matchRows;
+    if (filters.format && filters.format !== 'All') rows = rows.filter(r => r.format === filters.format);
+
+    if (filters.venue && filters.venue !== 'All') {
+      // single venue selected: show the full 1-11 position breakdown there
+      const scoped = rows.filter(r => r.venue === filters.venue);
+      const posStats = aggregatePositionStats(scoped);
+      posVenueNoteEl.textContent = `Position-by-position breakdown at ${filters.venue}. Position 0 (did not bat) is excluded.`;
+      if (!posStats.length) {
+        posVenueTableEl.innerHTML = '<p class="empty-state">Not enough data for this venue/format combination.</p>';
+        return;
+      }
+      renderSortableTable(posVenueTableEl, positionCols, posStats, 'position', 'asc');
+    } else {
+      // all venues: compare top/middle/lower buckets across grounds
+      const byVenue = aggregatePositionByVenue(rows).map(v => ({
+        venue: v.venue,
+        top_disp: fmtBucket(v.top),
+        middle_disp: fmtBucket(v.middle),
+        lower_disp: fmtBucket(v.lower),
+        _sortTop: v.top.average,
+      }));
+      posVenueNoteEl.textContent = 'Comparing order-of-batting output across grounds. Pick a venue above for the full 1-11 breakdown.';
+      if (!byVenue.length) {
+        posVenueTableEl.innerHTML = '<p class="empty-state">Not enough data for this format.</p>';
+        return;
+      }
+      renderSortableTable(posVenueTableEl, posVenueCols, byVenue, 'venue', 'asc');
+    }
+  }
+
+  buildFilterBar(posVenueFilterEl, {
+    formats, venues,
+    withFormat: true, withVenue: true, withOpponent: false,
+    withSearch: false, withMinMatches: false,
+  }, renderPosVenue);
+  renderPosVenue({ format: 'All', venue: 'All' });
+
+  /* ---------- Consistency ---------- */
+  const consistencyCols = [
+    { key: 'name', label: 'Player' },
+    { key: 'format', label: 'Format' },
+    { key: 'innings', label: 'Inn', num: true },
+    { key: 'average', label: 'Avg', num: true, format: (v) => v.toFixed(1) },
+    { key: 'stdev', label: 'Std dev', num: true, format: (v) => v.toFixed(1) },
+    { key: 'consistency', label: 'Consistency', num: true, format: (v) => v.toFixed(0) },
+  ];
+
+  function renderConsistency(filters) {
+    let rows = matchRows;
+    if (filters.format && filters.format !== 'All') rows = rows.filter(r => r.format === filters.format);
+    const minInnings = filters.minMatches > 0 ? filters.minMatches : 8;
+    const data = aggregateConsistency(rows, minInnings).slice(0, 25);
+    if (!data.length) {
+      consistencyTableEl.innerHTML = '<p class="empty-state">No players meet that innings threshold.</p>';
+      return;
+    }
+    renderSortableTable(consistencyTableEl, consistencyCols, data, 'consistency', 'desc');
+  }
+
+  buildFilterBar(consistencyFilterEl, {
+    formats,
+    withFormat: true, withVenue: false, withOpponent: false,
+    withSearch: false, withMinMatches: true, minMatchesLabel: 'Min innings',
+  }, renderConsistency);
+  renderConsistency({ format: 'All', minMatches: 8 });
+})();
+</script>
+
+</body>
+</html>

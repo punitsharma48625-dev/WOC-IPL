@@ -18,6 +18,7 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html">Records</a>
       <a href="player.html" class="active">Player Search</a>
+      <a href="insights.html">Insights</a>
     </nav>
   </div>
 </div>
@@ -33,6 +34,7 @@
 
   <ul class="match-list" id="match-list"></ul>
 
+  <div id="player-filter-bar"></div>
   <div id="player-card"></div>
 </main>
 
@@ -93,10 +95,29 @@ function renderPlayer(name) {
   document.getElementById('match-list').innerHTML = '';
   document.getElementById('search-input').value = name;
 
-  const bat = battingRows.filter(r => r.name === name);
-  const bowl = bowlingRows.filter(r => r.name === name);
-  const recent = matchRows
-    .filter(r => r.player === name)
+  const allPlayerRows = matchRows.filter(r => r.player === name);
+  const formats = uniqueSorted(allPlayerRows, 'format');
+  const opponents = uniqueSorted(allPlayerRows, 'opponent');
+
+  const filterBarEl = document.getElementById('player-filter-bar');
+  buildFilterBar(filterBarEl, {
+    formats, opponents,
+    withFormat: formats.length > 1, withVenue: false, withOpponent: true,
+    withSearch: false, withMinMatches: true, minMatchesLabel: 'Min matches (splits)',
+  }, (filters) => renderPlayerCard(name, filters));
+
+  renderPlayerCard(name, { format: 'All', opponent: 'All', minMatches: 0 });
+}
+
+function renderPlayerCard(name, filters) {
+  const bat = battingRows.filter(r => r.name === name && (!filters.format || filters.format === 'All' || r.format === filters.format));
+  const bowl = bowlingRows.filter(r => r.name === name && (!filters.format || filters.format === 'All' || r.format === filters.format));
+
+  let scopedRows = matchRows.filter(r => r.player === name);
+  if (filters.format && filters.format !== 'All') scopedRows = scopedRows.filter(r => r.format === filters.format);
+  if (filters.opponent && filters.opponent !== 'All') scopedRows = scopedRows.filter(r => r.opponent === filters.opponent);
+
+  const recent = scopedRows
     .map(r => ({ ...r, _ts: matchTimestamp(r) }))
     .sort((a, b) => b._ts - a._ts)
     .slice(0, 10);
@@ -149,13 +170,14 @@ function renderPlayer(name) {
       </tr>`;
   }).join('');
 
-  // Venue and opponent splits, built live from every logged row for this player.
-  const allPlayerRows = matchRows.filter(r => r.player === name);
-  const byVenue = aggregateByGroup(allPlayerRows, 'venue').slice(0, 10);
-  const byOpponent = aggregateByGroup(allPlayerRows, 'opponent').slice(0, 10);
+  // Venue and opponent splits, built live from every logged row for this
+  // player, scoped to the format/opponent filters and thresholded by
+  // min-matches so thin samples (one-off games at a ground) drop out.
+  const minM = filters.minMatches || 0;
+  const byVenue = aggregateByGroup(scopedRows, 'venue').filter(g => g.matches >= minM).slice(0, 10);
 
-  // Career milestones for this player, across all logged matches.
-  const milestones = aggregateMilestones(allPlayerRows).reduce((acc, m) => ({
+  // Career milestones for this player, across the filtered matches.
+  const milestones = aggregateMilestones(scopedRows).reduce((acc, m) => ({
     centuries: acc.centuries + m.centuries,
     fifties: acc.fifties + m.fifties,
     fivefers: acc.fivefers + m.fivefers,
@@ -208,18 +230,10 @@ function renderPlayer(name) {
           <thead><tr><th>Date</th><th>Match</th><th>Format</th><th>Performance</th></tr></thead>
           <tbody>${recentRows}</tbody>
         </table>
-      ` : '<p class="empty-state">No logged matches found for this player.</p>'}
+      ` : '<p class="empty-state">No logged matches match these filters.</p>'}
 
-      <div class="venue-split">
-        <div>
-          <div class="section-label">By venue <span class="section-note">(top 10 by matches)</span></div>
-          ${splitTable(byVenue, 'No venue data logged for this player.')}
-        </div>
-        <div>
-          <div class="section-label">By opponent <span class="section-note">(top 10 by matches)</span></div>
-          ${splitTable(byOpponent, 'No opponent data logged for this player.')}
-        </div>
-      </div>
+      <div class="section-label">By venue <span class="section-note">(top 10 by matches)</span></div>
+      ${splitTable(byVenue, 'No venue data logged for this player.')}
     </div>
   `;
 }

@@ -18,6 +18,7 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
+      <a href="insights.html">Insights</a>
     </nav>
   </div>
 </div>
@@ -27,6 +28,7 @@
   <p class="page-lede">Standings across the season, ranked by points then net run rate.</p>
 
   <div class="card">
+    <div id="filter-bar"></div>
     <div id="points-table"><p class="loading-note">Loading standings…</p></div>
   </div>
 </main>
@@ -37,6 +39,7 @@
 <script>
 (async function () {
   const container = document.getElementById('points-table');
+  const filterBarEl = document.getElementById('filter-bar');
   try {
     const rows = await loadCSV(DATA.points);
 
@@ -53,10 +56,33 @@
       },
     ];
 
-    // default sort: points desc, then nrr desc as tiebreak
-    rows.sort((a, b) => (b.points - a.points) || (b.nrr - a.nrr));
+    function render(filters) {
+      let filtered = rows.slice();
+      if (filters.search) {
+        filtered = filtered.filter(r => nameMatches(r.team, filters.search));
+      }
+      const n = filters.numeric || {};
+      if (n.wins != null) filtered = filtered.filter(r => r.wins >= n.wins);
+      if (n.points != null) filtered = filtered.filter(r => r.points >= n.points);
 
-    renderSortableTable(container, cols, rows, 'points', 'desc');
+      // default sort: points desc, then nrr desc as tiebreak
+      filtered.sort((a, b) => (b.points - a.points) || (b.nrr - a.nrr));
+
+      renderSortableTable(container, cols, filtered, 'points', 'desc');
+    }
+
+    buildFilterBar(filterBarEl, {
+      withFormat: false, withVenue: false, withOpponent: false,
+      withSearch: true, withMinMatches: false,
+      searchLabel: 'Search team',
+      searchPlaceholder: 'e.g. MI, CSK…',
+      numericFilters: [
+        { key: 'wins', label: 'Min wins', placeholder: 'e.g. 10' },
+        { key: 'points', label: 'Min points', placeholder: 'e.g. 20' },
+      ],
+    }, render);
+
+    render({ search: '', numeric: {} });
   } catch (e) {
     container.innerHTML = '<p class="empty-state">Could not load the points table. Check that data/points_league_nrr.csv exists.</p>';
     console.error(e);

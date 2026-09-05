@@ -18,6 +18,7 @@
       <a href="bowling.html" class="active">Bowling</a>
       <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
+      <a href="insights.html">Insights</a>
     </nav>
   </div>
 </div>
@@ -98,6 +99,10 @@
     if (filters.minMatches > 0) {
       rows = rows.filter(r => r.matches >= filters.minMatches);
     }
+    const n = filters.numeric || {};
+    if (n.wickets != null) rows = rows.filter(r => r.wickets >= n.wickets);
+    if (n.economy != null) rows = rows.filter(r => r.economy <= n.economy);
+    if (n.bowling_average != null) rows = rows.filter(r => r.bowling_average > 0 && r.bowling_average <= n.bowling_average);
 
     rows.sort((a, b) => b.wickets - a.wickets);
     renderSortableTable(tableEl, cols, rows, 'wickets', 'desc');
@@ -107,9 +112,14 @@
     formats, venues,
     withFormat: true, withVenue: true, withOpponent: false,
     withSearch: true, withMinMatches: true, minMatchesLabel: 'Min matches',
+    numericFilters: [
+      { key: 'wickets', label: 'Min wickets', placeholder: 'e.g. 20' },
+      { key: 'economy', label: 'Max economy', placeholder: 'e.g. 7.5' },
+      { key: 'bowling_average', label: 'Max bowl avg', placeholder: 'e.g. 25' },
+    ],
   }, render);
 
-  render({ format: 'All', venue: 'All', search: '', minMatches: 0 });
+  render({ format: 'All', venue: 'All', search: '', minMatches: 0, numeric: {} });
 })();
 </script>
 

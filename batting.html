@@ -18,6 +18,7 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
+      <a href="insights.html">Insights</a>
     </nav>
   </div>
 </div>
@@ -98,6 +99,10 @@
     if (filters.minMatches > 0) {
       rows = rows.filter(r => r.matches >= filters.minMatches);
     }
+    const n = filters.numeric || {};
+    if (n.runs != null) rows = rows.filter(r => r.runs >= n.runs);
+    if (n.average != null) rows = rows.filter(r => r.average >= n.average);
+    if (n.strike_rate != null) rows = rows.filter(r => r.strike_rate >= n.strike_rate);
 
     rows.sort((a, b) => b.runs - a.runs);
     renderSortableTable(tableEl, cols, rows, 'runs', 'desc');
@@ -107,9 +112,14 @@
     formats, venues,
     withFormat: true, withVenue: true, withOpponent: false,
     withSearch: true, withMinMatches: true, minMatchesLabel: 'Min matches',
+    numericFilters: [
+      { key: 'runs', label: 'Min runs', placeholder: 'e.g. 500' },
+      { key: 'average', label: 'Min average', placeholder: 'e.g. 30' },
+      { key: 'strike_rate', label: 'Min SR', placeholder: 'e.g. 130' },
+    ],
   }, render);
 
-  render({ format: 'All', venue: 'All', search: '', minMatches: 0 });
+  render({ format: 'All', venue: 'All', search: '', minMatches: 0, numeric: {} });
 })();
 </script>
 

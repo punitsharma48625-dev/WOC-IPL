@@ -323,9 +323,10 @@ function topIndividualScores(rows, n = 10, minBalls = 1) {
 
 /* Top N single-spell bowling figures (most wickets, tie-broken by
    fewest runs conceded, then best economy). */
-function topBowlingFigures(rows, n = 10) {
+function topBowlingFigures(rows, n = 10, minOvers = 0) {
   return rows
     .filter(r => r.player && (num(r.overs) > 0 || num(r.wickets) > 0 || num(r.runs_conceded) > 0))
+    .filter(r => num(r.overs) >= minOvers)
     .map(r => ({
       player: r.player, format: r.format, wickets: num(r.wickets),
       runs_conceded: num(r.runs_conceded), overs: num(r.overs),
@@ -336,6 +337,117 @@ function topBowlingFigures(rows, n = 10) {
     }))
     .sort((a, b) => b.wickets - a.wickets || a.runs_conceded - b.runs_conceded)
     .slice(0, n);
+}
+
+/* ------------------------------------------------------------------
+   Insights helpers — analysis derived from columns the other pages
+   don't use yet (position, fantasy_points) plus venue-level rollups.
+------------------------------------------------------------------- */
+
+/* League-wide batting output by position in the order (1-11). Position
+   "0" in the log means the player didn't bat, so it's excluded. Shows
+   where in the order runs actually get scored across the whole league. */
+function aggregatePositionStats(rows) {
+  const byPos = new Map();
+  rows.forEach(r => {
+    const pos = num(r.position);
+    if (pos <= 0) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls <= 0 && runs <= 0) return;
+    if (!byPos.has(pos)) {
+      byPos.set(pos, { position: pos, innings: 0, runs: 0, balls: 0, dismissals: 0 });
+    }
+    const p = byPos.get(pos);
+    p.innings += 1;
+    p.runs += runs;
+    p.balls += balls;
+    if (r.out === 'Yes') p.dismissals += 1;
+  });
+  return [...byPos.values()]
+    .map(p => ({
+      ...p,
+      average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
+      strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
+      runs_per_innings: p.innings > 0 ? p.runs / p.innings : 0,
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+/* Cross-tab of batting position vs venue: buckets the order into
+   Top (1-3) / Middle (4-6) / Lower (7-11) and shows average + strike
+   rate for each bucket at each ground — e.g. "openers do well at X,
+   but Y only rewards the middle order". */
+function aggregatePositionByVenue(rows, minInningsPerBucket = 15) {
+  const bucketOf = (pos) => (pos <= 3 ? 'top' : pos <= 6 ? 'middle' : 'lower');
+  const byVenue = new Map();
+  rows.forEach(r => {
+    const venue = r.venue;
+    const pos = num(r.position);
+    if (!venue || pos <= 0) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls <= 0 && runs <= 0) return;
+    if (!byVenue.has(venue)) {
+      byVenue.set(venue, {
+        venue,
+        top: { innings: 0, runs: 0, balls: 0, dismissals: 0 },
+        middle: { innings: 0, runs: 0, balls: 0, dismissals: 0 },
+        lower: { innings: 0, runs: 0, balls: 0, dismissals: 0 },
+      });
+    }
+    const b = byVenue.get(venue)[bucketOf(pos)];
+    b.innings += 1;
+    b.runs += runs;
+    b.balls += balls;
+    if (r.out === 'Yes') b.dismissals += 1;
+  });
+
+  function finish(b) {
+    return {
+      innings: b.innings,
+      average: b.dismissals > 0 ? b.runs / b.dismissals : b.runs,
+      strike_rate: b.balls > 0 ? (b.runs / b.balls) * 100 : 0,
+    };
+  }
+
+  return [...byVenue.values()]
+    .filter(v => v.top.innings >= minInningsPerBucket || v.middle.innings >= minInningsPerBucket || v.lower.innings >= minInningsPerBucket)
+    .map(v => ({
+      venue: v.venue,
+      top: finish(v.top), middle: finish(v.middle), lower: finish(v.lower),
+    }))
+    .sort((a, b) => a.venue.localeCompare(b.venue));
+}
+
+/* "Most consistent" batter: among players with at least minInnings
+   knocks, rank by low coefficient of variation (stdev / mean) of runs
+   per innings — i.e. reliably near their own average rather than
+   boom-or-bust — while still requiring a real average to matter. */
+function aggregateConsistency(rows, minInnings = 8, minAverage = 15) {
+  const byPlayer = new Map();
+  rows.forEach(r => {
+    if (!r.player) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls <= 0 && runs <= 0) return;
+    const key = `${r.player}|${r.format || ''}`;
+    if (!byPlayer.has(key)) byPlayer.set(key, { name: r.player, format: r.format || '', innings: [] });
+    byPlayer.get(key).innings.push(runs);
+  });
+  return [...byPlayer.values()]
+    .filter(p => p.innings.length >= minInnings)
+    .map(p => {
+      const n = p.innings.length;
+      const mean = p.innings.reduce((a, b) => a + b, 0) / n;
+      const variance = p.innings.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+      const stdev = Math.sqrt(variance);
+      const cv = mean > 0 ? stdev / mean : Infinity;
+      return {
+        name: p.name, format: p.format, innings: n,
+        average: mean, stdev,
+        consistency: mean > 0 ? Math.max(0, 100 - cv * 100) : 0,
+      };
+    })
+    .filter(p => p.average >= minAverage) // a low, steady average isn't the "reliability" people mean
+    .sort((a, b) => b.consistency - a.consistency);
 }
 
 /* ------------------------------------------------------------------
@@ -350,19 +462,28 @@ function buildFilterBar(container, opts, onChange) {
     withFormat = true, withVenue = false, withOpponent = false,
     withSearch = true, withMinMatches = false,
     minMatchesLabel = 'Min matches',
+    searchLabel = 'Search player',
+    searchPlaceholder = 'e.g. kohli, mhatre…',
+    numericFilters = [],
+    // numericFilters: [{ key, label, placeholder }]
+    // each becomes a number input; value lands in filters.numeric[key]
+    // (null when left blank, i.e. "no threshold"). The caller's render
+    // function decides how to compare it (gte/lte/etc) against rows.
   } = opts;
 
   const state = {
     format: 'All', venue: 'All', opponent: 'All', search: '', minMatches: 0,
+    numeric: {},
   };
+  numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
 
   const parts = [];
 
   if (withSearch) {
     parts.push(`
       <div class="filter-field filter-search">
-        <label>Search player</label>
-        <input type="text" id="f-search" placeholder="e.g. kohli, mhatre…" autocomplete="off">
+        <label>${searchLabel}</label>
+        <input type="text" id="f-search" placeholder="${searchPlaceholder}" autocomplete="off">
       </div>`);
   }
   if (withFormat) {
@@ -403,6 +524,14 @@ function buildFilterBar(container, opts, onChange) {
       </div>`);
   }
 
+  numericFilters.forEach(nf => {
+    parts.push(`
+      <div class="filter-field filter-narrow">
+        <label>${nf.label}</label>
+        <input type="number" id="f-num-${nf.key}" step="${nf.step || 'any'}" placeholder="${nf.placeholder || 'any'}">
+      </div>`);
+  });
+
   parts.push(`<button type="button" class="filter-reset" id="f-reset">Reset</button>`);
 
   container.innerHTML = `<div class="filter-bar">${parts.join('')}</div>`;
@@ -437,14 +566,26 @@ function buildFilterBar(container, opts, onChange) {
     }, 150));
   }
 
+  numericFilters.forEach(nf => {
+    const el = container.querySelector(`#f-num-${nf.key}`);
+    el.addEventListener('input', debounce(() => {
+      state.numeric[nf.key] = el.value.trim() === '' ? null : num(el.value);
+      fire();
+    }, 150));
+  });
+
   container.querySelector('#f-reset').addEventListener('click', () => {
     state.format = 'All'; state.venue = 'All'; state.opponent = 'All';
     state.search = ''; state.minMatches = 0;
+    numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
     if (withSearch) container.querySelector('#f-search').value = '';
     if (withFormat) container.querySelector('#f-format').value = 'All';
     if (withVenue) container.querySelector('#f-venue').value = 'All';
     if (withOpponent) container.querySelector('#f-opponent').value = '';
     if (withMinMatches) container.querySelector('#f-min').value = 0;
+    numericFilters.forEach(nf => {
+      container.querySelector(`#f-num-${nf.key}`).value = '';
+    });
     fire();
   });
 

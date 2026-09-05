@@ -18,6 +18,7 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html" class="active">Records</a>
       <a href="player.html">Player Search</a>
+      <a href="insights.html">Insights</a>
     </nav>
   </div>
 </div>
@@ -73,8 +74,8 @@
     return `${r.team} vs ${r.opponent}`;
   }
 
-  function renderTopScores(rows) {
-    const top = topIndividualScores(rows, 10, 1);
+  function renderTopScores(rows, minBalls = 1) {
+    const top = topIndividualScores(rows, 10, minBalls);
     if (!top.length) { scoresEl.innerHTML = '<p class="empty-state">No qualifying innings.</p>'; return; }
     scoresEl.innerHTML = `
       <table>
@@ -93,8 +94,8 @@
       </table>`;
   }
 
-  function renderTopBowling(rows) {
-    const top = topBowlingFigures(rows, 10);
+  function renderTopBowling(rows, minOvers = 0) {
+    const top = topBowlingFigures(rows, 10, minOvers);
     if (!top.length) { bowlingEl.innerHTML = '<p class="empty-state">No qualifying spells.</p>'; return; }
     bowlingEl.innerHTML = `
       <table>
@@ -125,10 +126,16 @@
   ];
 
   function render(filters) {
-    const rows = matchRows.filter(r => !filters.format || filters.format === 'All' || r.format === filters.format);
+    const rows = matchRows
+      .filter(r => !filters.format || filters.format === 'All' || r.format === filters.format)
+      .filter(r => !filters.search || nameMatches(r.player, filters.search));
 
-    renderTopScores(rows);
-    renderTopBowling(rows);
+    const n = filters.numeric || {};
+    const minBalls = n.minBalls != null ? n.minBalls : 1;
+    const minOvers = n.minOvers != null ? n.minOvers : 0;
+
+    renderTopScores(rows, minBalls);
+    renderTopBowling(rows, minOvers);
 
     let milestoneRows = aggregateMilestones(rows)
       .filter(r => r.centuries || r.fifties || r.fivefers || r.threefers);
@@ -139,10 +146,14 @@
   buildFilterBar(filterBarEl, {
     formats,
     withFormat: true, withVenue: false, withOpponent: false,
-    withSearch: false, withMinMatches: false,
+    withSearch: true, withMinMatches: false,
+    numericFilters: [
+      { key: 'minBalls', label: 'Min balls faced', placeholder: '1' },
+      { key: 'minOvers', label: 'Min overs bowled', placeholder: '0' },
+    ],
   }, render);
 
-  render({ format: 'All' });
+  render({ format: 'All', search: '', numeric: {} });
 })();
 </script>
 

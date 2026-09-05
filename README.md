@@ -6,14 +6,19 @@ from the CSV files in `/data` — there is no build step and no database.
 
 ## Pages
 
-- `index.html` — points table
+- `index.html` — points table, filterable by team name / min wins / min points
 - `batting.html` / `bowling.html` — all-time leaderboards, filterable by
-  format/venue/opponent
+  format/venue/opponent, plus threshold filters (min runs, min average, min
+  SR for batting; min wickets, max economy, max bowling average for bowling)
 - `records.html` — highest scores, best bowling figures, and career milestones
   (100s, 50s, 5-wicket hauls, 3-wicket hauls) — all computed live from the
-  match log
-- `player.html` — search any player for career stats, recent form, venue
-  and opponent splits, and their milestone totals
+  match log, filterable by format/player name and by qualifying min balls
+  faced / min overs bowled
+- `player.html` — search any player for career stats, recent form, and venue
+  splits, plus their milestone totals — filterable by format, opponent and
+  a min-matches threshold on the venue-split table
+- `insights.html` — deeper analysis: batting position vs venue (which part
+  of the order scores where), and a "most consistent batter" ranking
 
 (The old `venues.html` page was removed — it was the one causing pages to
 hang on load.)

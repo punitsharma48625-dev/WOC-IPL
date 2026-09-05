@@ -345,48 +345,67 @@ function topBowlingFigures(rows, n = 10, minOvers = 0) {
    didn't bat, so it's excluded. Works for either the whole league or
    a single player's rows, depending on what's passed in.
 ------------------------------------------------------------------- */
-function aggregatePositionByVenueMatrix(rows) {
-  const posSet = new Set();
-  const venueSet = new Set();
-  // cell[position][venue] = { runs, balls, dismissals, innings }
-  const cell = new Map();
+/* ------------------------------------------------------------------
+   Position analysis — comprehensive batting stats per position (1-11):
+   innings, runs, balls, average, strike rate, high score, 50s, 100s.
+   Venue is applied as a filter on `rows` before calling this (not a
+   column-per-venue breakdown), so the same table works whether you're
+   looking at one venue or all of them. Position "0" (didn't bat) is
+   excluded. Works for either the whole league or a single player's
+   rows, depending on what's passed in.
+------------------------------------------------------------------- */
+function aggregatePositionStats(rows) {
+  const byPos = new Map();
 
-  function getCell(pos, venue) {
-    const key = `${pos}|${venue}`;
-    if (!cell.has(key)) cell.set(key, { runs: 0, balls: 0, dismissals: 0, innings: 0 });
-    return cell.get(key);
+  function bucket(pos) {
+    if (!byPos.has(pos)) {
+      byPos.set(pos, {
+        position: pos, innings: 0, runs: 0, balls: 0, dismissals: 0,
+        centuries: 0, fifties: 0, highScore: 0, highScoreOut: true,
+      });
+    }
+    return byPos.get(pos);
   }
 
   rows.forEach(r => {
     const pos = num(r.position);
-    const venue = r.venue;
-    if (pos <= 0 || !venue) return;
+    if (pos <= 0) return;
     const runs = num(r.runs), balls = num(r.balls);
-    if (balls <= 0 && runs <= 0) return;
-    posSet.add(pos);
-    venueSet.add(venue);
-    const c = getCell(pos, venue);
-    c.innings += 1;
-    c.runs += runs;
-    c.balls += balls;
-    if (r.out === 'Yes') c.dismissals += 1;
+    if (balls <= 0 && runs <= 0) return; // did not bat
+    const p = bucket(pos);
+    const out = r.out === 'Yes';
+    p.innings += 1;
+    p.runs += runs;
+    p.balls += balls;
+    if (out) p.dismissals += 1;
+    if (runs >= 100) p.centuries += 1;
+    else if (runs >= 50) p.fifties += 1;
+    // Track the best single innings at this position; prefer a not-out
+    // score over an out score of the same value (as usual in cricket).
+    if (runs > p.highScore || (runs === p.highScore && !out && p.highScoreOut)) {
+      p.highScore = runs;
+      p.highScoreOut = out;
+    }
   });
 
-  const positions = [...posSet].sort((a, b) => a - b);
-  const venues = [...venueSet].sort((a, b) => a.localeCompare(b));
+  return [...byPos.values()]
+    .map(p => ({
+      ...p,
+      average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
+      strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
+    }))
+    .sort((a, b) => a.position - b.position);
+}
 
-  const table = positions.map(pos => {
-    const row = { position: pos, total: 0, totalInnings: 0 };
-    venues.forEach(v => {
-      const c = cell.get(`${pos}|${v}`);
-      row[v] = c ? c.runs : 0;
-      row.total += c ? c.runs : 0;
-      row.totalInnings += c ? c.innings : 0;
-    });
-    return row;
+/* Unique batting positions (1-11+) present in a set of match-log rows,
+   sorted ascending. Position "0" (didn't bat) is excluded. */
+function uniquePositions(rows) {
+  const set = new Set();
+  rows.forEach(r => {
+    const p = num(r.position);
+    if (p > 0) set.add(p);
   });
-
-  return { positions, venues, table };
+  return [...set].sort((a, b) => a - b);
 }
 
 /* ------------------------------------------------------------------
@@ -397,12 +416,14 @@ function aggregatePositionByVenueMatrix(rows) {
 ------------------------------------------------------------------- */
 function buildFilterBar(container, opts, onChange) {
   const {
-    formats = [], venues = [], opponents = [],
-    withFormat = true, withVenue = false, withOpponent = false,
+    formats = [], venues = [], opponents = [], positions = [],
+    withFormat = true, withVenue = false, withOpponent = false, withPosition = false,
     withSearch = true, withMinMatches = false,
     minMatchesLabel = 'Min matches',
     searchLabel = 'Search player',
     searchPlaceholder = 'e.g. kohli, mhatre…',
+    searchSuggestions = null, // optional array of names -> renders a datalist for autocomplete
+    venueAllLabel = 'All venues (official totals)',
     numericFilters = [],
     // numericFilters: [{ key, label, placeholder }]
     // each becomes a number input; value lands in filters.numeric[key]
@@ -411,7 +432,7 @@ function buildFilterBar(container, opts, onChange) {
   } = opts;
 
   const state = {
-    format: 'All', venue: 'All', opponent: 'All', search: '', minMatches: 0,
+    format: 'All', venue: 'All', opponent: 'All', position: 'All', search: '', minMatches: 0,
     numeric: {},
   };
   numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
@@ -419,10 +440,12 @@ function buildFilterBar(container, opts, onChange) {
   const parts = [];
 
   if (withSearch) {
+    const hasSuggestions = Array.isArray(searchSuggestions) && searchSuggestions.length > 0;
     parts.push(`
       <div class="filter-field filter-search">
         <label>${searchLabel}</label>
-        <input type="text" id="f-search" placeholder="${searchPlaceholder}" autocomplete="off">
+        <input type="text" id="f-search" placeholder="${searchPlaceholder}" autocomplete="off"${hasSuggestions ? ' list="f-search-list"' : ''}>
+        ${hasSuggestions ? `<datalist id="f-search-list">${searchSuggestions.map(n => `<option value="${n}">`).join('')}</datalist>` : ''}
       </div>`);
   }
   if (withFormat) {
@@ -440,8 +463,18 @@ function buildFilterBar(container, opts, onChange) {
       <div class="filter-field">
         <label>Venue</label>
         <select id="f-venue">
-          <option value="All">All venues (official totals)</option>
+          <option value="All">${venueAllLabel}</option>
           ${venues.map(v => `<option value="${v}">${v}</option>`).join('')}
+        </select>
+      </div>`);
+  }
+  if (withPosition) {
+    parts.push(`
+      <div class="filter-field">
+        <label>Position</label>
+        <select id="f-position">
+          <option value="All">All positions</option>
+          ${positions.map(p => `<option value="${p}">${p}</option>`).join('')}
         </select>
       </div>`);
   }
@@ -491,6 +524,11 @@ function buildFilterBar(container, opts, onChange) {
       state.venue = e.target.value; fire();
     });
   }
+  if (withPosition) {
+    container.querySelector('#f-position').addEventListener('change', (e) => {
+      state.position = e.target.value; fire();
+    });
+  }
   if (withOpponent) {
     const el = container.querySelector('#f-opponent');
     el.addEventListener('input', debounce(() => {
@@ -514,12 +552,13 @@ function buildFilterBar(container, opts, onChange) {
   });
 
   container.querySelector('#f-reset').addEventListener('click', () => {
-    state.format = 'All'; state.venue = 'All'; state.opponent = 'All';
+    state.format = 'All'; state.venue = 'All'; state.opponent = 'All'; state.position = 'All';
     state.search = ''; state.minMatches = 0;
     numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
     if (withSearch) container.querySelector('#f-search').value = '';
     if (withFormat) container.querySelector('#f-format').value = 'All';
     if (withVenue) container.querySelector('#f-venue').value = 'All';
+    if (withPosition) container.querySelector('#f-position').value = 'All';
     if (withOpponent) container.querySelector('#f-opponent').value = '';
     if (withMinMatches) container.querySelector('#f-min').value = 0;
     numericFilters.forEach(nf => {

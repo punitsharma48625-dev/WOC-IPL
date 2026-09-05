@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>League Stats — Positions</title>
+<title>League Stats — Player Position</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
@@ -18,14 +18,14 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
-      <a href="positions.html" class="active">Positions</a>
+      <a href="positions.html" class="active">Player Position</a>
     </nav>
   </div>
 </div>
 
 <main>
-  <h1>Runs by Batting Position</h1>
-  <p class="page-lede">Runs scored from each position in the order (1, 2, 3…), broken down by venue, with a total across all venues. Leave the player field blank for league-wide totals, or search a name for just their numbers. Position 0 (didn't bat) is excluded. Click a column to sort.</p>
+  <h1>Player Batting Position</h1>
+  <p class="page-lede">Search a player to see comprehensive stats — runs, average, strike rate, high score, 50s, 100s — for every position <em>they've</em> batted at, not just their overall total. Leave the player field blank for league-wide numbers instead. Venue and position are optional filters; leave them on "All" to see everything at once. Position 0 (didn't bat) is excluded. Click a column to sort.</p>
 
   <div class="card">
     <div id="filter-bar"></div>
@@ -53,41 +53,56 @@
   }
 
   const formats = uniqueSorted(matchRows, 'format');
+  const venues = uniqueSorted(matchRows, 'venue');
+  const positions = uniquePositions(matchRows);
+  const playerNames = uniqueSorted(matchRows, 'player');
+
+  const cols = [
+    { key: 'position', label: 'Position', num: true },
+    { key: 'innings', label: 'Inn', num: true },
+    { key: 'runs', label: 'Runs', num: true },
+    { key: 'balls', label: 'Balls', num: true },
+    { key: 'average', label: 'Avg', num: true, format: (v) => v.toFixed(1) },
+    { key: 'strike_rate', label: 'SR', num: true, format: (v) => v.toFixed(1) },
+    { key: 'highScore', label: 'HS', num: true, format: (v, row) => `${v}${row.highScoreOut ? '' : '*'}` },
+    { key: 'fifties', label: '50s', num: true },
+    { key: 'centuries', label: '100s', num: true },
+  ];
 
   function render(filters) {
     let rows = matchRows;
     if (filters.format && filters.format !== 'All') rows = rows.filter(r => r.format === filters.format);
+    if (filters.venue && filters.venue !== 'All') rows = rows.filter(r => r.venue === filters.venue);
     if (filters.search) rows = rows.filter(r => nameMatches(r.player, filters.search));
 
-    const { venues, table } = aggregatePositionByVenueMatrix(rows);
+    let table = aggregatePositionStats(rows);
+    if (filters.position && filters.position !== 'All') {
+      table = table.filter(r => String(r.position) === filters.position);
+    }
 
     if (!table.length) {
       tableEl.innerHTML = '<p class="empty-state">No qualifying innings for this filter.</p>';
       return;
     }
 
-    const cols = [
-      { key: 'position', label: 'Position', num: true },
-      ...venues.map(v => ({ key: v, label: v, num: true })),
-      { key: 'total', label: 'Total', num: true },
-    ];
-
-    noteEl.textContent = filters.search
-      ? `Showing ${filters.search}'s runs by position and venue.`
-      : 'Showing league-wide runs by position and venue, across every logged player.';
+    const who = filters.search ? `${filters.search}'s` : 'League-wide';
+    const where = filters.venue && filters.venue !== 'All' ? `at ${filters.venue}` : 'across all venues';
+    noteEl.textContent = `Showing ${who} batting by position, ${where}.`;
 
     renderSortableTable(tableEl, cols, table, 'position', 'asc');
   }
 
   buildFilterBar(filterBarEl, {
-    formats,
-    withFormat: true, withVenue: false, withOpponent: false,
+    formats, venues, positions,
+    withFormat: true, withVenue: true, withPosition: true, withOpponent: false,
     withSearch: true, withMinMatches: false,
-    searchLabel: 'Search player (optional)',
+    searchLabel: 'Player',
     searchPlaceholder: 'blank = whole league',
+    searchSuggestions: playerNames,
+    venueAllLabel: 'All venues',
   }, render);
 
-  render({ format: 'All', search: '' });
+  render({ format: 'All', venue: 'All', position: 'All', search: '' });
 })();
 </script>
 

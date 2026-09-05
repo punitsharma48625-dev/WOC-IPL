@@ -18,7 +18,7 @@
       <a href="bowling.html">Bowling</a>
       <a href="records.html" class="active">Records</a>
       <a href="player.html">Player Search</a>
-      <a href="positions.html">Positions</a>
+      <a href="positions.html">Player Position</a>
     </nav>
   </div>
 </div>
@@ -26,10 +26,6 @@
 <main>
   <h1>Records &amp; Milestones</h1>
   <p class="page-lede">Best single-match performances and career milestones, built live from the match log.</p>
-
-  <div class="card">
-    <div id="filter-bar"></div>
-  </div>
 
   <div class="card">
     <div class="section-label">Highest individual scores</div>
@@ -52,7 +48,6 @@
 <script src="app.js"></script>
 <script>
 (async function () {
-  const filterBarEl = document.getElementById('filter-bar');
   const scoresEl = document.getElementById('top-scores');
   const bowlingEl = document.getElementById('top-bowling');
   const milestonesEl = document.getElementById('milestones');
@@ -67,8 +62,6 @@
     console.error(e);
     return;
   }
-
-  const formats = uniqueSorted(matchRows, 'format');
 
   function matchLabel(r) {
     return `${r.team} vs ${r.opponent}`;
@@ -125,35 +118,17 @@
     { key: 'threefers', label: '3W', num: true },
   ];
 
-  function render(filters) {
-    const rows = matchRows
-      .filter(r => !filters.format || filters.format === 'All' || r.format === filters.format)
-      .filter(r => !filters.search || nameMatches(r.player, filters.search));
+  function render() {
+    renderTopScores(matchRows, 1);
+    renderTopBowling(matchRows, 0);
 
-    const n = filters.numeric || {};
-    const minBalls = n.minBalls != null ? n.minBalls : 1;
-    const minOvers = n.minOvers != null ? n.minOvers : 0;
-
-    renderTopScores(rows, minBalls);
-    renderTopBowling(rows, minOvers);
-
-    let milestoneRows = aggregateMilestones(rows)
+    let milestoneRows = aggregateMilestones(matchRows)
       .filter(r => r.centuries || r.fifties || r.fivefers || r.threefers);
     milestoneRows.sort((a, b) => (b.centuries - a.centuries) || (b.fifties - a.fifties) || (b.fivefers - a.fivefers) || (b.threefers - a.threefers));
     renderSortableTable(milestonesEl, milestoneCols, milestoneRows, 'centuries', 'desc');
   }
 
-  buildFilterBar(filterBarEl, {
-    formats,
-    withFormat: true, withVenue: false, withOpponent: false,
-    withSearch: true, withMinMatches: false,
-    numericFilters: [
-      { key: 'minBalls', label: 'Min balls faced', placeholder: '1' },
-      { key: 'minOvers', label: 'Min overs bowled', placeholder: '0' },
-    ],
-  }, render);
-
-  render({ format: 'All', search: '', numeric: {} });
+  render();
 })();
 </script>
 

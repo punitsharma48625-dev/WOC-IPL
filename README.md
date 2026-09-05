@@ -11,15 +11,15 @@ from the CSV files in `/data` — there is no build step and no database.
   format/venue/opponent, plus threshold filters (min runs, min average, min
   SR for batting; min wickets, max economy, max bowling average for bowling)
 - `records.html` — highest scores, best bowling figures, and career milestones
-  (100s, 50s, 5-wicket hauls, 3-wicket hauls) — all computed live from the
-  match log, filterable by format/player name and by qualifying min balls
-  faced / min overs bowled
+  (100s, 50s, 5-wicket hauls, 3-wicket hauls), always across the whole
+  league — computed live from the match log, no filters
 - `player.html` — search any player for career stats, recent form, and venue
   splits, plus their milestone totals — filterable by format, opponent and
   a min-matches threshold on the venue-split table
-- `positions.html` — runs by batting position (1-11) crossed with venue,
-  with a total column across all venues — league-wide, or scoped to one
-  player via the (optional) player search filter
+- `positions.html` ("Player Position" in the nav) — runs by batting position
+  (1-11) crossed with venue, with a total column across all venues —
+  league-wide, or scoped to one player via the player filter (type-ahead
+  suggests names as you type)
 
 (The old `venues.html` page was removed — it was the one causing pages to
 hang on load.)

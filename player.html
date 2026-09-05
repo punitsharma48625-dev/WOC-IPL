@@ -16,7 +16,7 @@
       <a href="index.html">Points Table</a>
       <a href="batting.html">Batting</a>
       <a href="bowling.html">Bowling</a>
-      <a href="venues.html">Venues</a>
+      <a href="records.html">Records</a>
       <a href="player.html" class="active">Player Search</a>
     </nav>
   </div>
@@ -118,10 +118,14 @@ function renderPlayer(name) {
 
   const bowlingStats = bowl.filter(r => r.wickets > 0 || r.matches > 0).map(r => {
     const econ = r.overs > 0 ? r.runs_conceded / r.overs : 0;
+    const avg = r.wickets > 0 ? r.runs_conceded / r.wickets : 0;
+    const sr = r.wickets > 0 ? (r.overs * 6) / r.wickets : 0;
     return `
       <div class="stat-grid">
         <div class="stat"><div class="stat-value">${r.wickets}</div><div class="stat-label">Wickets (${r.format})</div></div>
         <div class="stat"><div class="stat-value">${econ.toFixed(2)}</div><div class="stat-label">Economy</div></div>
+        <div class="stat"><div class="stat-value">${r.wickets > 0 ? avg.toFixed(1) : '—'}</div><div class="stat-label">Bowling avg</div></div>
+        <div class="stat"><div class="stat-value">${r.wickets > 0 ? sr.toFixed(1) : '—'}</div><div class="stat-label">Bowling SR</div></div>
         <div class="stat"><div class="stat-value">${Number(r.overs).toFixed(1)}</div><div class="stat-label">Overs</div></div>
         <div class="stat"><div class="stat-value">${r.runs_conceded}</div><div class="stat-label">Runs conceded</div></div>
         <div class="stat"><div class="stat-value">${r.matches}</div><div class="stat-label">Matches</div></div>
@@ -142,13 +146,28 @@ function renderPlayer(name) {
         <td>${r.team} vs ${r.opponent}</td>
         <td>${r.format}</td>
         <td>${roleBits.join(' · ') || '—'}</td>
-        <td class="num">${r.fantasy_points ?? '—'}</td>
       </tr>`;
   }).join('');
 
-  // Venue split, built live from every logged row for this player.
+  // Venue and opponent splits, built live from every logged row for this player.
   const allPlayerRows = matchRows.filter(r => r.player === name);
   const byVenue = aggregateByGroup(allPlayerRows, 'venue').slice(0, 10);
+  const byOpponent = aggregateByGroup(allPlayerRows, 'opponent').slice(0, 10);
+
+  // Career milestones for this player, across all logged matches.
+  const milestones = aggregateMilestones(allPlayerRows).reduce((acc, m) => ({
+    centuries: acc.centuries + m.centuries,
+    fifties: acc.fifties + m.fifties,
+    fivefers: acc.fivefers + m.fivefers,
+    threefers: acc.threefers + m.threefers,
+  }), { centuries: 0, fifties: 0, fivefers: 0, threefers: 0 });
+  const milestoneStats = (milestones.centuries || milestones.fifties || milestones.fivefers || milestones.threefers) ? `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${milestones.centuries}</div><div class="stat-label">100s</div></div>
+        <div class="stat"><div class="stat-value">${milestones.fifties}</div><div class="stat-label">50s</div></div>
+        <div class="stat"><div class="stat-value">${milestones.fivefers}</div><div class="stat-label">5-wkt hauls</div></div>
+        <div class="stat"><div class="stat-value">${milestones.threefers}</div><div class="stat-label">3-wkt hauls</div></div>
+      </div>` : '';
 
   function splitTable(groups, emptyMsg) {
     if (!groups.length) return `<p class="empty-state">${emptyMsg}</p>`;
@@ -161,10 +180,12 @@ function renderPlayer(name) {
         <td class="num">${g.balls ? g.strike_rate.toFixed(1) : '—'}</td>
         <td class="num">${g.wickets ? g.wickets : '—'}</td>
         <td class="num">${g.overs ? g.economy.toFixed(2) : '—'}</td>
+        <td class="num">${g.wickets ? g.bowling_average.toFixed(1) : '—'}</td>
+        <td class="num">${g.wickets ? g.bowling_sr.toFixed(1) : '—'}</td>
       </tr>`).join('');
     return `
       <table>
-        <thead><tr><th></th><th class="num">M</th><th class="num">Runs</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th></tr></thead>
+        <thead><tr><th></th><th class="num">M</th><th class="num">Runs</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">Bowl Avg</th><th class="num">Bowl SR</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
   }
@@ -179,17 +200,26 @@ function renderPlayer(name) {
 
       ${battingStats ? `<div class="section-label">Career batting</div>${battingStats}` : ''}
       ${bowlingStats ? `<div class="section-label">Career bowling</div>${bowlingStats}` : ''}
+      ${milestoneStats ? `<div class="section-label">Milestones</div>${milestoneStats}` : ''}
 
       <div class="section-label">Recent matches</div>
       ${recent.length ? `
         <table>
-          <thead><tr><th>Date</th><th>Match</th><th>Format</th><th>Performance</th><th class="num">Fantasy pts</th></tr></thead>
+          <thead><tr><th>Date</th><th>Match</th><th>Format</th><th>Performance</th></tr></thead>
           <tbody>${recentRows}</tbody>
         </table>
       ` : '<p class="empty-state">No logged matches found for this player.</p>'}
 
-      <div class="section-label">By venue <span class="section-note">(top 10 by matches — scout home grounds and weak spots)</span></div>
-      ${splitTable(byVenue, 'No venue data logged for this player.')}
+      <div class="venue-split">
+        <div>
+          <div class="section-label">By venue <span class="section-note">(top 10 by matches)</span></div>
+          ${splitTable(byVenue, 'No venue data logged for this player.')}
+        </div>
+        <div>
+          <div class="section-label">By opponent <span class="section-note">(top 10 by matches)</span></div>
+          ${splitTable(byOpponent, 'No opponent data logged for this player.')}
+        </div>
+      </div>
     </div>
   `;
 }

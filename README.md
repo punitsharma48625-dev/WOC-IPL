@@ -1,8 +1,22 @@
 # League Stats site
 
-A static site: points table, all-time batting/bowling leaderboards, and a
-player search page. Everything reads live from the CSV files in `/data` —
-there is no build step and no database.
+A static site: points table, all-time batting/bowling leaderboards, a
+records/milestones page, and a player search page. Everything reads live
+from the CSV files in `/data` — there is no build step and no database.
+
+## Pages
+
+- `index.html` — points table
+- `batting.html` / `bowling.html` — all-time leaderboards, filterable by
+  format/venue/opponent
+- `records.html` — highest scores, best bowling figures, and career milestones
+  (100s, 50s, 5-wicket hauls, 3-wicket hauls) — all computed live from the
+  match log
+- `player.html` — search any player for career stats, recent form, venue
+  and opponent splits, and their milestone totals
+
+(The old `venues.html` page was removed — it was the one causing pages to
+hang on load.)
 
 ## Deploy for free (GitHub Pages)
 

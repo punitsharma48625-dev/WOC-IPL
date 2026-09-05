@@ -16,7 +16,7 @@
       <a href="index.html">Points Table</a>
       <a href="batting.html">Batting</a>
       <a href="bowling.html" class="active">Bowling</a>
-      <a href="venues.html">Venues</a>
+      <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
     </nav>
   </div>
@@ -69,6 +69,7 @@
     { key: 'runs_conceded', label: 'Runs', num: true },
     { key: 'economy', label: 'Econ', num: true, format: (v) => v.toFixed(2) },
     { key: 'bowling_average', label: 'Avg', num: true, format: (v) => (v > 0 ? v.toFixed(1) : '—') },
+    { key: 'bowling_sr', label: 'SR', num: true, format: (v) => (v > 0 ? v.toFixed(1) : '—') },
     { key: 'matches', label: 'M', num: true },
   ];
 
@@ -85,6 +86,7 @@
           ...r,
           economy: r.overs > 0 ? r.runs_conceded / r.overs : 0,
           bowling_average: r.wickets > 0 ? r.runs_conceded / r.wickets : 0,
+          bowling_sr: r.wickets > 0 ? (r.overs * 6) / r.wickets : 0,
         }));
       noteEl.textContent = 'Showing official all-time totals.';
     } else {

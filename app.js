@@ -265,7 +265,77 @@ function aggregateByGroup(rows, groupKey) {
     strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
     average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
     economy: p.overs > 0 ? p.runs_conceded / p.overs : 0,
+    bowling_average: p.wickets > 0 ? p.runs_conceded / p.wickets : 0,
+    bowling_sr: p.wickets > 0 ? (p.overs * 6) / p.wickets : 0,
   })).sort((a, b) => b.matches - a.matches);
+}
+
+/* ------------------------------------------------------------------
+   Records & milestones — all derived from the raw match log.
+------------------------------------------------------------------- */
+
+/* Per-player-per-format count of milestone innings/spells:
+   centuries, fifties, five-wicket hauls, three-wicket hauls. */
+function aggregateMilestones(rows) {
+  const byPlayer = new Map();
+  function bucket(player, format) {
+    const key = `${player}|${format || ''}`;
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        name: player, format: format || '',
+        centuries: 0, fifties: 0, fivefers: 0, threefers: 0,
+      });
+    }
+    return byPlayer.get(key);
+  }
+  rows.forEach(r => {
+    if (!r.player) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls > 0 || runs > 0) {
+      const p = bucket(r.player, r.format);
+      if (runs >= 100) p.centuries += 1;
+      else if (runs >= 50) p.fifties += 1;
+    }
+    const wickets = num(r.wickets), overs = num(r.overs), rc = num(r.runs_conceded);
+    if (overs > 0 || wickets > 0 || rc > 0) {
+      const p = bucket(r.player, r.format);
+      if (wickets >= 5) p.fivefers += 1;
+      else if (wickets >= 3) p.threefers += 1;
+    }
+  });
+  return [...byPlayer.values()];
+}
+
+/* Top N single-innings batting performances (qualified by a minimum
+   number of balls faced, so a lucky single ball doesn't rank). */
+function topIndividualScores(rows, n = 10, minBalls = 1) {
+  return rows
+    .filter(r => r.player && (num(r.balls) > 0 || num(r.runs) > 0) && num(r.balls) >= minBalls)
+    .map(r => ({
+      player: r.player, format: r.format, runs: num(r.runs), balls: num(r.balls),
+      strike_rate: num(r.balls) > 0 ? (num(r.runs) / num(r.balls)) * 100 : 0,
+      out: r.out, team: r.team, opponent: r.opponent, venue: r.venue,
+      ts: matchTimestamp(r),
+    }))
+    .sort((a, b) => b.runs - a.runs || b.strike_rate - a.strike_rate)
+    .slice(0, n);
+}
+
+/* Top N single-spell bowling figures (most wickets, tie-broken by
+   fewest runs conceded, then best economy). */
+function topBowlingFigures(rows, n = 10) {
+  return rows
+    .filter(r => r.player && (num(r.overs) > 0 || num(r.wickets) > 0 || num(r.runs_conceded) > 0))
+    .map(r => ({
+      player: r.player, format: r.format, wickets: num(r.wickets),
+      runs_conceded: num(r.runs_conceded), overs: num(r.overs),
+      economy: num(r.overs) > 0 ? num(r.runs_conceded) / num(r.overs) : 0,
+      bowling_average: num(r.wickets) > 0 ? num(r.runs_conceded) / num(r.wickets) : 0,
+      bowling_sr: num(r.wickets) > 0 ? (num(r.overs) * 6) / num(r.wickets) : 0,
+      team: r.team, opponent: r.opponent, venue: r.venue, ts: matchTimestamp(r),
+    }))
+    .sort((a, b) => b.wickets - a.wickets || a.runs_conceded - b.runs_conceded)
+    .slice(0, n);
 }
 
 /* ------------------------------------------------------------------

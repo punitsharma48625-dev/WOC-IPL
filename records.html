@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Records</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html" class="active">Records</a>
+      <a href="player.html">Player Search</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Records &amp; Milestones</h1>
+  <p class="page-lede">Best single-match performances and career milestones, built live from the match log.</p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Highest individual scores</div>
+    <div id="top-scores"><p class="loading-note">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Best bowling figures</div>
+    <div id="top-bowling"><p class="loading-note">Loading…</p></div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Career milestones <span class="section-note">(100s, 50s, 5-wicket hauls, 3-wicket hauls)</span></div>
+    <div id="milestones"><p class="loading-note">Loading…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js"></script>
+<script>
+(async function () {
+  const filterBarEl = document.getElementById('filter-bar');
+  const scoresEl = document.getElementById('top-scores');
+  const bowlingEl = document.getElementById('top-bowling');
+  const milestonesEl = document.getElementById('milestones');
+
+  let matchRows = [];
+  try {
+    matchRows = await loadCSV(DATA.matchlog);
+  } catch (e) {
+    [scoresEl, bowlingEl, milestonesEl].forEach(el => {
+      el.innerHTML = '<p class="empty-state">Could not load the match log.</p>';
+    });
+    console.error(e);
+    return;
+  }
+
+  const formats = uniqueSorted(matchRows, 'format');
+
+  function matchLabel(r) {
+    return `${r.team} vs ${r.opponent}`;
+  }
+
+  function renderTopScores(rows) {
+    const top = topIndividualScores(rows, 10, 1);
+    if (!top.length) { scoresEl.innerHTML = '<p class="empty-state">No qualifying innings.</p>'; return; }
+    scoresEl.innerHTML = `
+      <table>
+        <thead><tr><th class="num">#</th><th>Player</th><th>Format</th><th class="num">Runs</th><th class="num">Balls</th><th class="num">SR</th><th>Match</th><th>Venue</th></tr></thead>
+        <tbody>${top.map((r, i) => `
+          <tr>
+            <td class="num rank-cell">${i + 1}</td>
+            <td>${r.player}</td>
+            <td>${r.format}</td>
+            <td class="num">${r.runs}${r.out === 'No' ? '*' : ''}</td>
+            <td class="num">${r.balls}</td>
+            <td class="num">${r.strike_rate.toFixed(1)}</td>
+            <td>${matchLabel(r)}</td>
+            <td>${r.venue || '—'}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+  }
+
+  function renderTopBowling(rows) {
+    const top = topBowlingFigures(rows, 10);
+    if (!top.length) { bowlingEl.innerHTML = '<p class="empty-state">No qualifying spells.</p>'; return; }
+    bowlingEl.innerHTML = `
+      <table>
+        <thead><tr><th class="num">#</th><th>Player</th><th>Format</th><th class="num">Figures</th><th class="num">Overs</th><th class="num">Econ</th><th class="num">Avg</th><th class="num">SR</th><th>Match</th><th>Venue</th></tr></thead>
+        <tbody>${top.map((r, i) => `
+          <tr>
+            <td class="num rank-cell">${i + 1}</td>
+            <td>${r.player}</td>
+            <td>${r.format}</td>
+            <td class="num">${r.wickets}/${r.runs_conceded}</td>
+            <td class="num">${r.overs.toFixed(1)}</td>
+            <td class="num">${r.economy.toFixed(2)}</td>
+            <td class="num">${r.bowling_average > 0 ? r.bowling_average.toFixed(1) : '—'}</td>
+            <td class="num">${r.bowling_sr > 0 ? r.bowling_sr.toFixed(1) : '—'}</td>
+            <td>${matchLabel(r)}</td>
+            <td>${r.venue || '—'}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+  }
+
+  const milestoneCols = [
+    { key: 'name', label: 'Player' },
+    { key: 'format', label: 'Format' },
+    { key: 'centuries', label: '100s', num: true },
+    { key: 'fifties', label: '50s', num: true },
+    { key: 'fivefers', label: '5W', num: true },
+    { key: 'threefers', label: '3W', num: true },
+  ];
+
+  function render(filters) {
+    const rows = matchRows.filter(r => !filters.format || filters.format === 'All' || r.format === filters.format);
+
+    renderTopScores(rows);
+    renderTopBowling(rows);
+
+    let milestoneRows = aggregateMilestones(rows)
+      .filter(r => r.centuries || r.fifties || r.fivefers || r.threefers);
+    milestoneRows.sort((a, b) => (b.centuries - a.centuries) || (b.fifties - a.fifties) || (b.fivefers - a.fivefers) || (b.threefers - a.threefers));
+    renderSortableTable(milestonesEl, milestoneCols, milestoneRows, 'centuries', 'desc');
+  }
+
+  buildFilterBar(filterBarEl, {
+    formats,
+    withFormat: true, withVenue: false, withOpponent: false,
+    withSearch: false, withMinMatches: false,
+  }, render);
+
+  render({ format: 'All' });
+})();
+</script>
+
+</body>
+</html>

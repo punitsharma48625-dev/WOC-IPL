@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Matchup</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html">Player Search</a>
+      <a href="positions.html">Player Position</a>
+      <a href="matchup.html" class="active">Matchup</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Batter vs Bowler Matchup</h1>
+  <p class="page-lede">
+    Head-to-head history for any batter, any bowler, or a specific pair — balls, runs,
+    wickets, dot%, strike rate and average, straight from the logged ball-by-ball data.
+    <strong>Edge</strong> mirrors the bot's own <code>!matchup</code> verdict (small samples
+    under 6 balls are treated as no data). Click a column to sort.
+  </p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
+    <div id="matchup-table"><p class="loading-note">Loading matchup data…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js?v=2"></script>
+<script>
+(async function () {
+  const tableEl = document.getElementById('matchup-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let rows = [];
+  try {
+    rows = await loadCSV(DATA.matchup);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load the matchup sheet. Check that data/batter_vs_bowler_matchup.csv exists.</p>';
+    console.error(e);
+    return;
+  }
+
+  rows = rows.filter(r => r.batter && r.bowler);
+
+  const batters = uniqueSorted(rows, 'batter');
+  const bowlers = uniqueSorted(rows, 'bowler');
+  const TOTAL_PAIRS = rows.length;
+  const UNFILTERED_CAP = 300; // don't dump every pairing on first load
+
+  const cols = [
+    { key: 'batter', label: 'Batter' },
+    { key: 'bowler', label: 'Bowler' },
+    { key: 'balls', label: 'Balls', num: true },
+    { key: 'runs', label: 'Runs', num: true },
+    { key: 'wickets', label: 'Wkts', num: true },
+    { key: 'dot_pct', label: 'Dot%', num: true, format: (v) => num(v).toFixed(1) },
+    { key: 'strike_rate', label: 'SR', num: true, format: (v) => num(v).toFixed(1) },
+    { key: 'average', label: 'Avg', num: true, format: (v) => num(v).toFixed(1) },
+    { key: 'fours', label: '4s', num: true },
+    { key: 'sixes', label: '6s', num: true },
+    {
+      key: 'edgeLabel', label: 'Edge',
+      format: (v, row) => v,
+      cellClass: (row) => row.edgeCls,
+    },
+  ];
+
+  function withEdge(list) {
+    return list.map(r => {
+      const balls = num(r.balls), runs = num(r.runs), wickets = num(r.wickets);
+      const edge = computeMatchupEdge(balls, runs, wickets);
+      return { ...r, balls, runs, wickets, edgeLabel: edge.label, edgeCls: edge.cls };
+    });
+  }
+
+  function render(filters) {
+    let filtered = rows;
+
+    const batterQ = (filters.search || '').trim();
+    const bowlerQ = (filters.search2 || '').trim();
+
+    if (batterQ) filtered = filtered.filter(r => nameMatches(r.batter, batterQ));
+    if (bowlerQ) filtered = filtered.filter(r => nameMatches(r.bowler, bowlerQ));
+
+    const n = filters.numeric || {};
+    if (n.balls != null) filtered = filtered.filter(r => num(r.balls) >= n.balls);
+    if (n.runs != null) filtered = filtered.filter(r => num(r.runs) >= n.runs);
+    if (n.wickets != null) filtered = filtered.filter(r => num(r.wickets) >= n.wickets);
+    if (n.average != null) filtered = filtered.filter(r => num(r.average) >= n.average);
+    if (n.strike_rate != null) filtered = filtered.filter(r => num(r.strike_rate) >= n.strike_rate);
+
+    const anyFilterApplied = !!batterQ || !!bowlerQ ||
+      Object.values(n).some(v => v != null);
+
+    if (!anyFilterApplied && filtered.length > UNFILTERED_CAP) {
+      noteEl.textContent =
+        `${TOTAL_PAIRS.toLocaleString()} batter-bowler pairings logged in total. ` +
+        `Type a batter and/or bowler above (or set a min-balls/runs threshold) to narrow it down.`;
+      tableEl.innerHTML = '<p class="empty-state">Apply a filter above to see matchups — showing all pairings at once isn\u2019t very useful.</p>';
+      return;
+    }
+
+    const table = withEdge(filtered);
+
+    if (!table.length) {
+      noteEl.textContent = 'No logged history for this filter yet.';
+      tableEl.innerHTML = '<p class="empty-state">No matching pairings.</p>';
+      return;
+    }
+
+    const who = batterQ && bowlerQ
+      ? `${batterQ} vs ${bowlerQ}`
+      : batterQ
+        ? `${batterQ} vs every logged bowler`
+        : bowlerQ
+          ? `every logged batter vs ${bowlerQ}`
+          : 'all logged pairings';
+    noteEl.textContent = `Showing ${who} — ${table.length.toLocaleString()} pairing${table.length === 1 ? '' : 's'}.`;
+
+    renderSortableTable(tableEl, cols, table, 'balls', 'desc');
+  }
+
+  buildFilterBar(filterBarEl, {
+    withFormat: false, withVenue: false, withOpponent: false, withMinMatches: false,
+    withSearch: true, searchLabel: 'Batter', searchPlaceholder: 'All batters',
+    searchSuggestions: batters,
+    withSearch2: true, search2Label: 'Bowler', search2Placeholder: 'All bowlers',
+    search2Suggestions: bowlers,
+    numericFilters: [
+      { key: 'balls', label: 'Min balls', placeholder: 'e.g. 6' },
+      { key: 'runs', label: 'Min runs', placeholder: 'e.g. 20' },
+      { key: 'wickets', label: 'Min wkts', placeholder: 'e.g. 1' },
+      { key: 'average', label: 'Min avg', placeholder: 'e.g. 30' },
+      { key: 'strike_rate', label: 'Min SR', placeholder: 'e.g. 130' },
+    ],
+  }, render);
+
+  render({ search: '', search2: '', numeric: {} });
+})();
+</script>
+
+</body>
+</html>

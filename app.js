@@ -21,6 +21,7 @@ const DATA = {
   batting: 'data/league_batting_stats_alltime.csv',
   bowling: 'data/league_bowling_stats_alltime.csv',
   matchlog: 'data/player_match_logs_odiwc.csv',
+  matchup: 'data/batter_vs_bowler_matchup.csv',
 };
 
 /* ---------- CSV loading, cached so every page only fetches once ---------- */
@@ -271,6 +272,40 @@ function aggregateByGroup(rows, groupKey) {
 }
 
 /* ------------------------------------------------------------------
+   Batter-vs-bowler matchup edge — mirrors the bot's own !matchup /
+   get_matchup_factors logic exactly (same baselines & thresholds),
+   so the "Edge" column here always agrees with what the bot says.
+   Below MATCHUP_MIN_BALLS the sample is treated as no data (neutral).
+------------------------------------------------------------------- */
+const MATCHUP_BASELINE_RPB = 1.30;        // league-average runs per ball
+const MATCHUP_BASELINE_OUT_RATE = 0.055;  // league-average dismissals per ball
+const MATCHUP_MIN_BALLS = 6;
+const MATCHUP_FULL_CONFIDENCE_BALLS = 30;
+
+function computeMatchupEdge(balls, runs, wickets) {
+  if (balls < MATCHUP_MIN_BALLS) return { label: '—', cls: '', runsFactor: 1, outFactor: 1 };
+
+  const rpb = runs / balls;
+  const outRate = wickets / balls;
+  const weight = Math.min(balls / MATCHUP_FULL_CONFIDENCE_BALLS, 1.0);
+
+  let runsDelta = (rpb / MATCHUP_BASELINE_RPB) - 1.0;
+  runsDelta = Math.max(-0.30, Math.min(0.30, runsDelta));
+  const runsFactor = 1.0 + weight * runsDelta;
+
+  let outDelta = (outRate / MATCHUP_BASELINE_OUT_RATE) - 1.0;
+  outDelta = Math.max(-0.40, Math.min(0.60, outDelta));
+  const outFactor = 1.0 + weight * outDelta;
+
+  let label, cls;
+  if (runsFactor > 1.02 || outFactor < 0.98) { label = 'Batter'; cls = 'pos-nrr'; }
+  else if (runsFactor < 0.98 || outFactor > 1.02) { label = 'Bowler'; cls = 'neg-nrr'; }
+  else { label = 'Even'; cls = ''; }
+
+  return { label, cls, runsFactor, outFactor };
+}
+
+/* ------------------------------------------------------------------
    Records & milestones — all derived from the raw match log.
 ------------------------------------------------------------------- */
 
@@ -423,6 +458,13 @@ function buildFilterBar(container, opts, onChange) {
     searchLabel = 'Search player',
     searchPlaceholder = 'e.g. kohli, mhatre…',
     searchSuggestions = null, // optional array of names -> renders a datalist for autocomplete
+    // Optional second independent search field (e.g. "Bowler" alongside a
+    // "Batter" primary search) -- lands in filters.search2. Off by default,
+    // purely additive, doesn't affect any existing page's filter bar.
+    withSearch2 = false,
+    search2Label = 'Search',
+    search2Placeholder = 'All',
+    search2Suggestions = null,
     venueAllLabel = 'All venues (official totals)',
     numericFilters = [],
     // numericFilters: [{ key, label, placeholder }]
@@ -432,7 +474,7 @@ function buildFilterBar(container, opts, onChange) {
   } = opts;
 
   const state = {
-    format: 'All', venue: 'All', opponent: 'All', position: 'All', search: '', minMatches: 0,
+    format: 'All', venue: 'All', opponent: 'All', position: 'All', search: '', search2: '', minMatches: 0,
     numeric: {},
   };
   numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
@@ -446,6 +488,15 @@ function buildFilterBar(container, opts, onChange) {
         <label>${searchLabel}</label>
         <input type="text" id="f-search" placeholder="${searchPlaceholder}" autocomplete="off"${hasSuggestions ? ' list="f-search-list"' : ''}>
         ${hasSuggestions ? `<datalist id="f-search-list">${searchSuggestions.map(n => `<option value="${n}">`).join('')}</datalist>` : ''}
+      </div>`);
+  }
+  if (withSearch2) {
+    const hasSuggestions2 = Array.isArray(search2Suggestions) && search2Suggestions.length > 0;
+    parts.push(`
+      <div class="filter-field filter-search">
+        <label>${search2Label}</label>
+        <input type="text" id="f-search2" placeholder="${search2Placeholder}" autocomplete="off"${hasSuggestions2 ? ' list="f-search2-list"' : ''}>
+        ${hasSuggestions2 ? `<datalist id="f-search2-list">${search2Suggestions.map(n => `<option value="${n}">`).join('')}</datalist>` : ''}
       </div>`);
   }
   if (withFormat) {
@@ -514,6 +565,10 @@ function buildFilterBar(container, opts, onChange) {
     const el = container.querySelector('#f-search');
     el.addEventListener('input', debounce(() => { state.search = el.value.trim(); fire(); }, 120));
   }
+  if (withSearch2) {
+    const el = container.querySelector('#f-search2');
+    el.addEventListener('input', debounce(() => { state.search2 = el.value.trim(); fire(); }, 120));
+  }
   if (withFormat) {
     container.querySelector('#f-format').addEventListener('change', (e) => {
       state.format = e.target.value; fire();
@@ -553,9 +608,10 @@ function buildFilterBar(container, opts, onChange) {
 
   container.querySelector('#f-reset').addEventListener('click', () => {
     state.format = 'All'; state.venue = 'All'; state.opponent = 'All'; state.position = 'All';
-    state.search = ''; state.minMatches = 0;
+    state.search = ''; state.search2 = ''; state.minMatches = 0;
     numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
     if (withSearch) container.querySelector('#f-search').value = '';
+    if (withSearch2) container.querySelector('#f-search2').value = '';
     if (withFormat) container.querySelector('#f-format').value = 'All';
     if (withVenue) container.querySelector('#f-venue').value = 'All';
     if (withPosition) container.querySelector('#f-position').value = 'All';

@@ -169,10 +169,12 @@ function renderSortableTable(container, columns, rows, initialSortKey, initialDi
     }).join('') : `<tr><td colspan="${columns.length + 1}" class="empty-state">No rows match these filters.</td></tr>`;
 
     container.innerHTML = `
-      <table>
-        <thead><tr><th class="num rank-cell">#</th>${thead}</tr></thead>
-        <tbody>${tbody}</tbody>
-      </table>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th class="num rank-cell">#</th>${thead}</tr></thead>
+          <tbody>${tbody}</tbody>
+        </table>
+      </div>
     `;
 
     container.querySelectorAll('thead th[data-key]').forEach(th => {

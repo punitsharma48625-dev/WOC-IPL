@@ -40,7 +40,7 @@ a { color: inherit; }
 }
 
 .topbar-inner {
-  max-width: 980px;
+  max-width: 1180px;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -79,7 +79,7 @@ nav.mainnav a.active {
 
 /* ---------- Page shell ---------- */
 main {
-  max-width: 980px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 40px 24px 80px;
 }
@@ -101,6 +101,12 @@ main {
 }
 
 /* ---------- Tables ---------- */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -1px; /* let the scroll area reach the card's own border */
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -346,7 +352,7 @@ td.num, th.num { text-align: right; }
 }
 
 footer {
-  max-width: 980px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 0 24px 40px;
   color: var(--ink-soft);

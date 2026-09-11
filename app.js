@@ -22,6 +22,12 @@ const DATA = {
   bowling: 'data/league_bowling_stats_alltime.csv',
   matchlog: 'data/player_match_logs_odiwc.csv',
   matchup: 'data/batter_vs_bowler_matchup.csv',
+  // 100k simulation data. To refresh with the full 100k run, replace these
+  // two files with the same names (same sheet names inside the workbook,
+  // same column headers in the CSV) and the 100k pages pick it up with no
+  // code changes.
+  sim100k: 'data/100k_simulation_results.xlsx',
+  matchup100k: 'data/100k_batter_vs_bowler_matchup.csv',
 };
 
 /* ---------- CSV loading, cached so every page only fetches once ---------- */
@@ -44,6 +50,77 @@ function loadCSV(path) {
 function num(v) {
   const n = Number(v);
   return isFinite(n) ? n : 0;
+}
+
+/* ------------------------------------------------------------------
+   100k simulation workbook loading (SheetJS). The whole workbook —
+   an "Overall Batting"/"Overall Bowling" sheet plus one "V_<Venue> Bat"
+   and "V_<Venue> Bowl" sheet per venue — is fetched and parsed directly
+   in the browser. Updating the site to the real 100k run later is just
+   dropping a new file at the same path (data/100k_simulation_results.xlsx)
+   with the same sheet names; nothing else needs to change.
+------------------------------------------------------------------- */
+const _xlsxCache = {};
+function loadWorkbook(path) {
+  if (_xlsxCache[path]) return _xlsxCache[path];
+  _xlsxCache[path] = fetch(path)
+    .then(r => {
+      if (!r.ok) throw new Error(`Could not fetch ${path} (${r.status})`);
+      return r.arrayBuffer();
+    })
+    .then(buf => XLSX.read(buf, { type: 'array' }));
+  return _xlsxCache[path];
+}
+
+function sheetRows(wb, sheetName) {
+  const sheet = wb.Sheets[sheetName];
+  if (!sheet) return [];
+  return XLSX.utils.sheet_to_json(sheet, { defval: 0, raw: true });
+}
+
+/* The workbook's "Team" column is actually team+attack-faced, e.g.
+   "dc_neutral", "csk_pace", "rr_spin". Split it into a clean franchise
+   code and an attack-type facet so both are independently filterable. */
+const SIM_ATTACK_SUFFIXES = ['neutral', 'pace', 'spin'];
+function parseTeamAttack(rawTeam) {
+  const s = String(rawTeam || '');
+  for (const suf of SIM_ATTACK_SUFFIXES) {
+    if (s.endsWith('_' + suf)) {
+      return { team: s.slice(0, -(suf.length + 1)).toUpperCase(), attack: suf };
+    }
+  }
+  return { team: s.toUpperCase(), attack: '' };
+}
+
+/* The 10 venues simulated, and the exact sheet names holding each one's
+   batting/bowling breakdown in the workbook. */
+const SIM_VENUES = [
+  'Mohali', 'Ekana', 'Chepauk', 'Hyderabad', 'Jaipur',
+  'Ahmedabad', 'Wankhede', 'Eden', 'Chinnaswamy', 'Delhi',
+];
+
+/* Build the full dataset for one discipline ('Batting' or 'Bowling'):
+   the league-wide sheet tagged venue:'All', plus every venue-specific
+   sheet tagged with its venue name — each row also gets a clean `team`
+   and `attack` field split out of the raw "Team" column. Cached per
+   workbook+kind so repeated renders don't reparse the sheets. */
+const _sim100kCache = {};
+function build100kDataset(wb, kind) {
+  const cacheKey = kind;
+  if (_sim100kCache[cacheKey]) return _sim100kCache[cacheKey];
+
+  const tag = (rows, venue) => rows.map(r => {
+    const { team, attack } = parseTeamAttack(r.Team);
+    return { ...r, venue, team, attack };
+  });
+
+  let all = tag(sheetRows(wb, `Overall ${kind}`), 'All');
+  SIM_VENUES.forEach(v => {
+    all = all.concat(tag(sheetRows(wb, `V_${v} ${kind === 'Batting' ? 'Bat' : 'Bowl'}`), v));
+  });
+
+  _sim100kCache[cacheKey] = all;
+  return all;
 }
 
 function debounce(fn, ms = 150) {
@@ -471,6 +548,17 @@ function buildFilterBar(container, opts, onChange) {
     // each becomes a number input; value lands in filters.numeric[key]
     // (null when left blank, i.e. "no threshold"). The caller's render
     // function decides how to compare it (gte/lte/etc) against rows.
+    selects = [],
+    // selects: [{ key, label, options, allLabel }]
+    // a fully generic dropdown, value lands in filters[key]; 'options'
+    // is a plain array of strings, 'allLabel' (default 'All') is the
+    // label for the default/no-filter option, whose value is always 'All'.
+    exclusivePairs = [],
+    // exclusivePairs: [[keyA, keyB], ...] — when one select in a pair is
+    // set away from 'All', the other is forced back to 'All' and disabled,
+    // since the two facets can't be combined in this dataset (e.g. phase
+    // x strategy splits weren't simulated). Re-enabled once back to 'All'.
+    exclusiveNote = null, // optional line of text shown under the bar
   } = opts;
 
   const state = {
@@ -478,6 +566,7 @@ function buildFilterBar(container, opts, onChange) {
     numeric: {},
   };
   numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
+  selects.forEach(sel => { state[sel.key] = 'All'; });
 
   const parts = [];
 
@@ -555,9 +644,21 @@ function buildFilterBar(container, opts, onChange) {
       </div>`);
   });
 
+  selects.forEach(sel => {
+    parts.push(`
+      <div class="filter-field" id="f-field-${sel.key}">
+        <label>${sel.label}</label>
+        <select id="f-sel-${sel.key}">
+          <option value="All">${sel.allLabel || 'All'}</option>
+          ${sel.options.map(o => `<option value="${o}">${o}</option>`).join('')}
+        </select>
+      </div>`);
+  });
+
   parts.push(`<button type="button" class="filter-reset" id="f-reset">Reset</button>`);
 
-  container.innerHTML = `<div class="filter-bar">${parts.join('')}</div>`;
+  container.innerHTML = `<div class="filter-bar">${parts.join('')}</div>` +
+    (exclusiveNote ? `<p class="exclusive-note">${exclusiveNote}</p>` : '');
 
   function fire() { onChange({ ...state }); }
 
@@ -606,10 +707,47 @@ function buildFilterBar(container, opts, onChange) {
     }, 150));
   });
 
+  // Generic selects, plus mutual-exclusion enforcement for any pair
+  // named in exclusivePairs (e.g. phase vs strategy).
+  function partnerKeyOf(key) {
+    for (const [a, b] of exclusivePairs) {
+      if (a === key) return b;
+      if (b === key) return a;
+    }
+    return null;
+  }
+  function setSelectLocked(key, locked) {
+    const el = container.querySelector(`#f-sel-${key}`);
+    const field = container.querySelector(`#f-field-${key}`);
+    if (!el) return;
+    el.disabled = locked;
+    if (field) field.classList.toggle('filter-locked', locked);
+  }
+
+  selects.forEach(sel => {
+    const el = container.querySelector(`#f-sel-${sel.key}`);
+    el.addEventListener('change', (e) => {
+      state[sel.key] = e.target.value;
+      const partner = partnerKeyOf(sel.key);
+      if (partner) {
+        if (e.target.value !== 'All') {
+          state[partner] = 'All';
+          const partnerEl = container.querySelector(`#f-sel-${partner}`);
+          if (partnerEl) partnerEl.value = 'All';
+          setSelectLocked(partner, true);
+        } else {
+          setSelectLocked(partner, false);
+        }
+      }
+      fire();
+    });
+  });
+
   container.querySelector('#f-reset').addEventListener('click', () => {
     state.format = 'All'; state.venue = 'All'; state.opponent = 'All'; state.position = 'All';
     state.search = ''; state.search2 = ''; state.minMatches = 0;
     numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
+    selects.forEach(sel => { state[sel.key] = 'All'; setSelectLocked(sel.key, false); });
     if (withSearch) container.querySelector('#f-search').value = '';
     if (withSearch2) container.querySelector('#f-search2').value = '';
     if (withFormat) container.querySelector('#f-format').value = 'All';
@@ -619,6 +757,9 @@ function buildFilterBar(container, opts, onChange) {
     if (withMinMatches) container.querySelector('#f-min').value = 0;
     numericFilters.forEach(nf => {
       container.querySelector(`#f-num-${nf.key}`).value = '';
+    });
+    selects.forEach(sel => {
+      container.querySelector(`#f-sel-${sel.key}`).value = 'All';
     });
     fire();
   });

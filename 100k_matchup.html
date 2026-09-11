@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>League Stats — Matchup</title>
+<title>League Stats — 100k Matchup</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
@@ -19,18 +19,20 @@
       <a href="records.html">Records</a>
       <a href="player.html">Player Search</a>
       <a href="positions.html">Player Position</a>
-      <a href="matchup.html" class="active">Matchup</a>
+      <a href="matchup.html">Matchup</a>
       <a href="100k_batting.html">100k Batting</a>
       <a href="100k_bowling.html">100k Bowling</a>
-      <a href="100k_matchup.html">100k Matchup</a>
+      <a href="100k_matchup.html" class="active">100k Matchup</a>
     </nav>
   </div>
 </div>
 
 <main>
-  <h1>Batter vs Bowler Matchup</h1>
+  <h1>100k Simulation — Batter vs Bowler Matchup</h1>
   <p class="page-lede">
-    Head-to-head history for any batter, any bowler, or a specific pair — balls, runs,
+    From the 100k simulation run (currently a 1,000-game sample at
+    <code>data/100k_batter_vs_bowler_matchup.csv</code> — swap that file for the full
+    100k run when it's ready). Head-to-head history for any batter, any bowler, or a specific pair — balls, runs,
     wickets, dot%, strike rate and average, straight from the logged ball-by-ball data.
     <strong>Edge</strong> mirrors the bot's own <code>!matchup</code> verdict (small samples
     under 6 balls are treated as no data). Click a column to sort.
@@ -39,11 +41,11 @@
   <div class="card">
     <div id="filter-bar"></div>
     <p class="filter-note" id="filter-note"></p>
-    <div id="matchup-table"><p class="loading-note">Loading matchup data…</p></div>
+    <div id="matchup-table"><p class="loading-note">Loading 100k matchup data…</p></div>
   </div>
 </main>
 
-<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+<footer>Data reads live from data/100k_batter_vs_bowler_matchup.csv — replace that file (same name, same columns) to update.</footer>
 
 <script src="app.js?v=2"></script>
 <script>
@@ -54,9 +56,9 @@
 
   let rows = [];
   try {
-    rows = await loadCSV(DATA.matchup);
+    rows = await loadCSV(DATA.matchup100k);
   } catch (e) {
-    tableEl.innerHTML = '<p class="empty-state">Could not load the matchup sheet. Check that data/batter_vs_bowler_matchup.csv exists.</p>';
+    tableEl.innerHTML = '<p class="empty-state">Could not load the matchup sheet. Check that data/100k_batter_vs_bowler_matchup.csv exists.</p>';
     console.error(e);
     return;
   }

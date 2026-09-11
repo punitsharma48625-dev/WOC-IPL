@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — 100k Batting</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html">Player Search</a>
+      <a href="positions.html">Player Position</a>
+      <a href="matchup.html">Matchup</a>
+      <a href="100k_batting.html" class="active">100k Batting</a>
+      <a href="100k_bowling.html">100k Bowling</a>
+      <a href="100k_matchup.html">100k Matchup</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>100k Simulation — Batting</h1>
+  <p class="page-lede">
+    Read straight from the simulation workbook (currently a 1,000-game sample; the same
+    file at <code>data/100k_simulation_results.xlsx</code> will be swapped for the full
+    100k run once it's ready — no other changes needed). Filter by venue, team, attack
+    faced, phase or strategy. Click a column to sort.
+  </p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
+    <div id="batting-table"><p class="loading-note">Loading simulation workbook…</p></div>
+  </div>
+</main>
+
+<footer>Data reads live from data/100k_simulation_results.xlsx — replace that file (same name, same sheet names) to update.</footer>
+
+<script src="app.js?v=2"></script>
+<script>
+(async function () {
+  const tableEl = document.getElementById('batting-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  const fmt2 = (v) => Number(v).toFixed(2);
+  const fmt1 = (v) => Number(v).toFixed(1);
+  const pct1 = (v) => Number(v).toFixed(1) + '%';
+
+  let rows = [];
+  try {
+    const wb = await loadWorkbook(DATA.sim100k);
+    rows = build100kDataset(wb, 'Batting').filter(r => r.Player);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load the simulation workbook. Check that data/100k_simulation_results.xlsx exists.</p>';
+    console.error(e);
+    return;
+  }
+
+  const teams = [...new Set(rows.map(r => r.team))].filter(Boolean).sort();
+
+  const PHASE_PREFIX = { Powerplay: 'PP', Middle: 'Mid', Death: 'Death' };
+  const STRATEGY_PREFIX = { Defensive: 'Def', Normal: 'Norm', Aggressive: 'Agg' };
+
+  function activeFields(phase, strategy) {
+    if (phase !== 'All') {
+      const p = PHASE_PREFIX[phase];
+      return { runs: `${p}_Runs`, balls: `${p}_Balls`, outs: `${p}_Outs`, avg: `${p}_Avg`, sr: `${p}_SR` };
+    }
+    if (strategy !== 'All') {
+      const s = STRATEGY_PREFIX[strategy];
+      return { runs: `${s}_Runs`, balls: `${s}_Balls`, outs: `${s}_Outs`, avg: `${s}_Avg`, sr: `${s}_SR` };
+    }
+    return { runs: 'Runs', balls: 'Balls', outs: 'Outs', avg: 'Avg', sr: 'SR' };
+  }
+
+  function columnsFor(phase, strategy) {
+    const base = [
+      { key: 'Player', label: 'Player' },
+      { key: 'team', label: 'Team' },
+      { key: 'attack', label: 'Attack', format: (v) => v ? v[0].toUpperCase() + v.slice(1) : '—' },
+      { key: 'venue', label: 'Venue' },
+    ];
+    if (phase !== 'All') {
+      const p = PHASE_PREFIX[phase];
+      return base.concat([
+        { key: `${p}_Runs`, label: 'Runs', num: true },
+        { key: `${p}_Balls`, label: 'Balls', num: true },
+        { key: `${p}_Outs`, label: 'Outs', num: true },
+        { key: `${p}_Avg`, label: 'Avg', num: true, format: fmt2 },
+        { key: `${p}_SR`, label: 'SR', num: true, format: fmt2 },
+        { key: `${p}_Contrib%`, label: 'Contrib%', num: true, format: pct1 },
+      ]);
+    }
+    if (strategy !== 'All') {
+      const s = STRATEGY_PREFIX[strategy];
+      return base.concat([
+        { key: `${s}_Runs`, label: 'Runs', num: true },
+        { key: `${s}_Balls`, label: 'Balls', num: true },
+        { key: `${s}_Outs`, label: 'Outs', num: true },
+        { key: `${s}_Avg`, label: 'Avg', num: true, format: fmt2 },
+        { key: `${s}_SR`, label: 'SR', num: true, format: fmt2 },
+      ]);
+    }
+    return base.concat([
+      { key: 'Innings', label: 'Inn', num: true },
+      { key: 'Runs', label: 'Runs', num: true },
+      { key: 'Balls', label: 'Balls', num: true },
+      { key: 'Outs', label: 'Outs', num: true },
+      { key: 'Avg', label: 'Avg', num: true, format: fmt2 },
+      { key: 'SR', label: 'SR', num: true, format: fmt2 },
+      { key: 'HighScore', label: 'HS', num: true },
+      { key: 'Fifties', label: '50s', num: true },
+      { key: 'Hundreds', label: '100s', num: true },
+      { key: 'Not-Out%', label: 'NO%', num: true, format: pct1 },
+      { key: 'BattingPI', label: 'PI', num: true, format: fmt1 },
+    ]);
+  }
+
+  function render(filters) {
+    let filtered = rows
+      .filter(r => filters.venue === 'All' || r.venue === filters.venue)
+      .filter(r => filters.team === 'All' || r.team === filters.team)
+      .filter(r => filters.attack === 'All' || r.attack.toLowerCase() === filters.attack.toLowerCase())
+      .filter(r => !filters.search || nameMatches(r.Player, filters.search));
+
+    const f = activeFields(filters.phase, filters.strategy);
+    const n = filters.numeric || {};
+    if (filters.minMatches > 0) filtered = filtered.filter(r => num(r.Innings) >= filters.minMatches);
+    if (n.runs != null) filtered = filtered.filter(r => num(r[f.runs]) >= n.runs);
+    if (n.balls != null) filtered = filtered.filter(r => num(r[f.balls]) >= n.balls);
+    if (n.avg != null) filtered = filtered.filter(r => num(r[f.avg]) >= n.avg);
+    if (n.strike_rate != null) filtered = filtered.filter(r => num(r[f.sr]) >= n.strike_rate);
+
+    const viewLabel = filters.phase !== 'All' ? `phase: ${filters.phase}`
+      : filters.strategy !== 'All' ? `strategy: ${filters.strategy}`
+      : 'overall (career)';
+    noteEl.textContent = `Showing ${viewLabel} — ${filtered.length.toLocaleString()} row${filtered.length === 1 ? '' : 's'}.`;
+
+    renderSortableTable(tableEl, columnsFor(filters.phase, filters.strategy), filtered, f.runs, 'desc');
+  }
+
+  buildFilterBar(filterBarEl, {
+    venues: SIM_VENUES, withVenue: true, venueAllLabel: 'All venues (career totals)',
+    withFormat: false, withOpponent: false,
+    withSearch: true, searchLabel: 'Player', searchPlaceholder: 'e.g. rahul, livingstone…',
+    withMinMatches: true, minMatchesLabel: 'Min innings',
+    selects: [
+      { key: 'team', label: 'Team', options: teams, allLabel: 'All teams' },
+      { key: 'attack', label: 'Attack faced', options: ['Pace', 'Spin', 'Neutral'], allLabel: 'All attack types' },
+      { key: 'phase', label: 'Phase', options: ['Powerplay', 'Middle', 'Death'], allLabel: 'Overall (all phases)' },
+      { key: 'strategy', label: 'Strategy', options: ['Defensive', 'Normal', 'Aggressive'], allLabel: 'Overall (all strategies)' },
+    ],
+    exclusivePairs: [['phase', 'strategy']],
+    exclusiveNote: 'Phase and strategy aren\u2019t cross-tabulated in the sim (no Powerplay-and-Aggressive breakdown, etc.) \u2014 choosing one clears and locks the other.',
+    numericFilters: [
+      { key: 'runs', label: 'Min runs', placeholder: 'e.g. 500' },
+      { key: 'balls', label: 'Min balls', placeholder: 'e.g. 300' },
+      { key: 'avg', label: 'Min avg', placeholder: 'e.g. 30' },
+      { key: 'strike_rate', label: 'Min SR', placeholder: 'e.g. 130' },
+    ],
+  }, render);
+
+  render({ venue: 'All', team: 'All', attack: 'All', phase: 'All', strategy: 'All', search: '', minMatches: 0, numeric: {} });
+})();
+</script>
+
+</body>
+</html>

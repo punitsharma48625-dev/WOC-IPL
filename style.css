@@ -198,6 +198,23 @@ td.num, th.num { text-align: right; }
   color: var(--pitch);
 }
 
+.filter-field select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--paper-line);
+}
+
+.filter-field.filter-locked label {
+  color: var(--wicket);
+}
+
+.exclusive-note {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin: -4px 0 10px 0;
+  font-style: italic;
+}
+
 .filter-note {
   font-size: 0.82rem;
   color: var(--ink-soft);

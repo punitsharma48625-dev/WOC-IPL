@@ -78,18 +78,18 @@ function sheetRows(wb, sheetName) {
   return XLSX.utils.sheet_to_json(sheet, { defval: 0, raw: true });
 }
 
-/* The workbook's "Team" column is actually team+attack-faced, e.g.
+/* The workbook's "Team" column is actually team+pitch-type-faced, e.g.
    "dc_neutral", "csk_pace", "rr_spin". Split it into a clean franchise
-   code and an attack-type facet so both are independently filterable. */
-const SIM_ATTACK_SUFFIXES = ['neutral', 'pace', 'spin'];
-function parseTeamAttack(rawTeam) {
+   code and a pitch-type facet so both are independently filterable. */
+const SIM_PITCH_TYPE_SUFFIXES = ['neutral', 'pace', 'spin'];
+function parseTeamPitchType(rawTeam) {
   const s = String(rawTeam || '');
-  for (const suf of SIM_ATTACK_SUFFIXES) {
+  for (const suf of SIM_PITCH_TYPE_SUFFIXES) {
     if (s.endsWith('_' + suf)) {
-      return { team: s.slice(0, -(suf.length + 1)).toUpperCase(), attack: suf };
+      return { team: s.slice(0, -(suf.length + 1)).toUpperCase(), pitch_type: suf };
     }
   }
-  return { team: s.toUpperCase(), attack: '' };
+  return { team: s.toUpperCase(), pitch_type: '' };
 }
 
 /* The 10 venues simulated, and the exact sheet names holding each one's
@@ -102,7 +102,7 @@ const SIM_VENUES = [
 /* Build the full dataset for one discipline ('Batting' or 'Bowling'):
    the league-wide sheet tagged venue:'All', plus every venue-specific
    sheet tagged with its venue name — each row also gets a clean `team`
-   and `attack` field split out of the raw "Team" column. Cached per
+   and `pitch_type` field split out of the raw "Team" column. Cached per
    workbook+kind so repeated renders don't reparse the sheets. */
 const _sim100kCache = {};
 function build100kDataset(wb, kind) {
@@ -110,8 +110,8 @@ function build100kDataset(wb, kind) {
   if (_sim100kCache[cacheKey]) return _sim100kCache[cacheKey];
 
   const tag = (rows, venue) => rows.map(r => {
-    const { team, attack } = parseTeamAttack(r.Team);
-    return { ...r, venue, team, attack };
+    const { team, pitch_type } = parseTeamPitchType(r.Team);
+    return { ...r, venue, team, pitch_type };
   });
 
   let all = tag(sheetRows(wb, `Overall ${kind}`), 'All');

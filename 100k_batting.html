@@ -29,12 +29,6 @@
 
 <main>
   <h1>100k Simulation — Batting</h1>
-  <p class="page-lede">
-    Read straight from the simulation workbook (currently a 1,000-game sample; the same
-    file at <code>data/100k_simulation_results.xlsx</code> will be swapped for the full
-    100k run once it's ready — no other changes needed). Filter by venue, team, attack
-    faced, phase or strategy. Click a column to sort.
-  </p>
 
   <div class="card">
     <div id="filter-bar"></div>
@@ -53,7 +47,6 @@
   const filterBarEl = document.getElementById('filter-bar');
 
   const fmt2 = (v) => Number(v).toFixed(2);
-  const fmt1 = (v) => Number(v).toFixed(1);
   const pct1 = (v) => Number(v).toFixed(1) + '%';
 
   let rows = [];
@@ -87,9 +80,10 @@
     const base = [
       { key: 'Player', label: 'Player' },
       { key: 'team', label: 'Team' },
-      { key: 'attack', label: 'Attack', format: (v) => v ? v[0].toUpperCase() + v.slice(1) : '—' },
+      { key: 'pitch_type', label: 'Pitch Type', format: (v) => v ? v[0].toUpperCase() + v.slice(1) : '—' },
       { key: 'venue', label: 'Venue' },
     ];
+
     if (phase !== 'All') {
       const p = PHASE_PREFIX[phase];
       return base.concat([
@@ -101,6 +95,7 @@
         { key: `${p}_Contrib%`, label: 'Contrib%', num: true, format: pct1 },
       ]);
     }
+
     if (strategy !== 'All') {
       const s = STRATEGY_PREFIX[strategy];
       return base.concat([
@@ -111,6 +106,7 @@
         { key: `${s}_SR`, label: 'SR', num: true, format: fmt2 },
       ]);
     }
+
     return base.concat([
       { key: 'Innings', label: 'Inn', num: true },
       { key: 'Runs', label: 'Runs', num: true },
@@ -118,11 +114,8 @@
       { key: 'Outs', label: 'Outs', num: true },
       { key: 'Avg', label: 'Avg', num: true, format: fmt2 },
       { key: 'SR', label: 'SR', num: true, format: fmt2 },
-      { key: 'HighScore', label: 'HS', num: true },
       { key: 'Fifties', label: '50s', num: true },
       { key: 'Hundreds', label: '100s', num: true },
-      { key: 'Not-Out%', label: 'NO%', num: true, format: pct1 },
-      { key: 'BattingPI', label: 'PI', num: true, format: fmt1 },
     ]);
   }
 
@@ -130,7 +123,7 @@
     let filtered = rows
       .filter(r => filters.venue === 'All' || r.venue === filters.venue)
       .filter(r => filters.team === 'All' || r.team === filters.team)
-      .filter(r => filters.attack === 'All' || r.attack.toLowerCase() === filters.attack.toLowerCase())
+      .filter(r => filters.pitch_type === 'All' || r.pitch_type.toLowerCase() === filters.pitch_type.toLowerCase())
       .filter(r => !filters.search || nameMatches(r.Player, filters.search));
 
     const f = activeFields(filters.phase, filters.strategy);
@@ -150,18 +143,23 @@
   }
 
   buildFilterBar(filterBarEl, {
-    venues: SIM_VENUES, withVenue: true, venueAllLabel: 'All venues (career totals)',
-    withFormat: false, withOpponent: false,
-    withSearch: true, searchLabel: 'Player', searchPlaceholder: 'e.g. rahul, livingstone…',
-    withMinMatches: true, minMatchesLabel: 'Min innings',
+    venues: SIM_VENUES,
+    withVenue: true,
+    venueAllLabel: 'All venues (career totals)',
+    withFormat: false,
+    withOpponent: false,
+    withSearch: true,
+    searchLabel: 'Player',
+    searchPlaceholder: 'e.g. rahul, livingstone…',
+    withMinMatches: true,
+    minMatchesLabel: 'Min innings',
     selects: [
       { key: 'team', label: 'Team', options: teams, allLabel: 'All teams' },
-      { key: 'attack', label: 'Attack faced', options: ['Pace', 'Spin', 'Neutral'], allLabel: 'All attack types' },
+      { key: 'pitch_type', label: 'Pitch Type', options: ['Pace', 'Spin', 'Neutral'], allLabel: 'All pitch types' },
       { key: 'phase', label: 'Phase', options: ['Powerplay', 'Middle', 'Death'], allLabel: 'Overall (all phases)' },
       { key: 'strategy', label: 'Strategy', options: ['Defensive', 'Normal', 'Aggressive'], allLabel: 'Overall (all strategies)' },
     ],
     exclusivePairs: [['phase', 'strategy']],
-    exclusiveNote: 'Phase and strategy aren\u2019t cross-tabulated in the sim (no Powerplay-and-Aggressive breakdown, etc.) \u2014 choosing one clears and locks the other.',
     numericFilters: [
       { key: 'runs', label: 'Min runs', placeholder: 'e.g. 500' },
       { key: 'balls', label: 'Min balls', placeholder: 'e.g. 300' },
@@ -170,7 +168,7 @@
     ],
   }, render);
 
-  render({ venue: 'All', team: 'All', attack: 'All', phase: 'All', strategy: 'All', search: '', minMatches: 0, numeric: {} });
+  render({ venue: 'All', team: 'All', pitch_type: 'All', phase: 'All', strategy: 'All', search: '', minMatches: 0, numeric: {} });
 })();
 </script>
 

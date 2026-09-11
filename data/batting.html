@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Batting</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html" class="active">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html">Player Search</a>
+      <a href="positions.html">Player Position</a>
+      <a href="matchup.html">Matchup</a>
+      <a href="100k_batting.html">100k Batting</a>
+      <a href="100k_bowling.html">100k Bowling</a>
+      <a href="100k_matchup.html">100k Matchup</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>All-Time Batting</h1>
+  <p class="page-lede">Career run totals, filterable by format, venue and opponent. Click a column to sort.</p>
+
+  <div class="card">
+    <div id="filter-bar"></div>
+    <p class="filter-note" id="filter-note"></p>
+    <div id="batting-table"><p class="loading-note">Loading batting stats…</p></div>
+  </div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js?v=2"></script>
+<script>
+(async function () {
+  const tableEl = document.getElementById('batting-table');
+  const noteEl = document.getElementById('filter-note');
+  const filterBarEl = document.getElementById('filter-bar');
+
+  let alltimeRows = [];
+  let matchRows = [];
+
+  try {
+    [alltimeRows, matchRows] = await Promise.all([
+      loadCSV(DATA.batting),
+      loadCSV(DATA.matchlog),
+    ]);
+  } catch (e) {
+    tableEl.innerHTML = '<p class="empty-state">Could not load batting data. Check the /data folder.</p>';
+    console.error(e);
+    return;
+  }
+
+  const formats = uniqueSorted(matchRows, 'format').length
+    ? uniqueSorted(matchRows, 'format')
+    : uniqueSorted(alltimeRows, 'format');
+  const venues = uniqueSorted(matchRows, 'venue');
+
+  const cols = [
+    { key: 'name', label: 'Player' },
+    { key: 'format', label: 'Format' },
+    { key: 'runs', label: 'Runs', num: true },
+    { key: 'balls', label: 'Balls', num: true },
+    { key: 'strike_rate', label: 'SR', num: true, format: (v) => v.toFixed(2) },
+    { key: 'matches', label: 'M', num: true },
+    { key: 'innings', label: 'Inn', num: true },
+    { key: 'average', label: 'Avg', num: true, format: (v) => v.toFixed(1) },
+  ];
+
+  function render(filters) {
+    const usingAllTotals = filters.venue === 'All';
+
+    let rows;
+    if (usingAllTotals) {
+      // official career totals, no dismissals data available here so
+      // "average" falls back to runs-per-innings like the old site did.
+      rows = alltimeRows
+        .filter(r => r.name)
+        .filter(r => !filters.format || filters.format === 'All' || r.format === filters.format)
+        .filter(r => !filters.search || nameMatches(r.name, filters.search))
+        .map(r => ({
+          ...r,
+          strike_rate: r.balls > 0 ? (r.runs / r.balls) * 100 : 0,
+          average: r.innings > 0 ? r.runs / r.innings : 0,
+        }));
+      noteEl.textContent = 'Showing official all-time totals (Avg here is runs per innings — outs aren\u2019t tracked in this file).';
+    } else {
+      const filtered = filterMatchRows(matchRows, filters);
+      rows = aggregateBatting(filtered);
+      noteEl.textContent = `Computed live from the match log (venue: ${filters.venue}) — Avg is runs per dismissal, and totals can differ slightly from the official all-time file.`;
+    }
+
+    if (filters.minMatches > 0) {
+      rows = rows.filter(r => r.matches >= filters.minMatches);
+    }
+    const n = filters.numeric || {};
+    if (n.runs != null) rows = rows.filter(r => r.runs >= n.runs);
+    if (n.average != null) rows = rows.filter(r => r.average >= n.average);
+    if (n.strike_rate != null) rows = rows.filter(r => r.strike_rate >= n.strike_rate);
+
+    rows.sort((a, b) => b.runs - a.runs);
+    renderSortableTable(tableEl, cols, rows, 'runs', 'desc');
+  }
+
+  buildFilterBar(filterBarEl, {
+    formats, venues,
+    withFormat: true, withVenue: true, withOpponent: false,
+    withSearch: true, withMinMatches: true, minMatchesLabel: 'Min matches',
+    numericFilters: [
+      { key: 'runs', label: 'Min runs', placeholder: 'e.g. 500' },
+      { key: 'average', label: 'Min average', placeholder: 'e.g. 30' },
+      { key: 'strike_rate', label: 'Min SR', placeholder: 'e.g. 130' },
+    ],
+  }, render);
+
+  render({ format: 'All', venue: 'All', search: '', minMatches: 0, numeric: {} });
+})();
+</script>
+
+</body>
+</html>

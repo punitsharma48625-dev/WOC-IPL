@@ -1,0 +1,768 @@
+/* ------------------------------------------------------------------
+   League Stats site — all data is read live from the CSV files in
+   /data. To update the site, replace those CSVs (same file names)
+   and push. No conversion step needed.
+
+   Data model note:
+   - league_batting_stats_alltime.csv / league_bowling_stats_alltime.csv
+     are the OFFICIAL career totals. They are the source of truth for
+     "all venues / all opponents" views.
+   - player_match_logs_odiwc.csv is a per-player-per-match log (one row
+     per player per match they appeared in, format/venue/opponent
+     included). It's the source of truth for anything the official
+     totals can't answer: per-venue splits, per-opponent ("matchup")
+     splits, and recent form. Its grand totals can differ slightly from
+     the official CSVs (it's a rawer, ungroomed log) — that's expected,
+     not a bug, and the site labels those views accordingly.
+------------------------------------------------------------------- */
+
+const DATA = {
+  points: 'data/points_league_nrr.csv',
+  batting: 'data/league_batting_stats_alltime.csv',
+  bowling: 'data/league_bowling_stats_alltime.csv',
+  matchlog: 'data/player_match_logs_odiwc.csv',
+  matchup: 'data/batter_vs_bowler_matchup.csv',
+  // 100k simulation data. To refresh with the full 100k run, replace these
+  // two files with the same names (same sheet names inside the workbook,
+  // same column headers in the CSV) and the 100k pages pick it up with no
+  // code changes.
+  sim100k: 'data/100k_simulation_results.xlsx',
+  matchup100k: 'data/100k_batter_vs_bowler_matchup.csv',
+};
+
+/* ---------- CSV loading, cached so every page only fetches once ---------- */
+const _csvCache = {};
+function loadCSV(path) {
+  if (_csvCache[path]) return _csvCache[path];
+  _csvCache[path] = new Promise((resolve, reject) => {
+    Papa.parse(path, {
+      download: true,
+      header: true,
+      dynamicTyping: true,
+      skipEmptyLines: true,
+      complete: (results) => resolve(results.data),
+      error: reject,
+    });
+  });
+  return _csvCache[path];
+}
+
+function num(v) {
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
+}
+
+/* ------------------------------------------------------------------
+   100k simulation workbook loading (SheetJS). The whole workbook —
+   an "Overall Batting"/"Overall Bowling" sheet plus one "V_<Venue> Bat"
+   and "V_<Venue> Bowl" sheet per venue — is fetched and parsed directly
+   in the browser. Updating the site to the real 100k run later is just
+   dropping a new file at the same path (data/100k_simulation_results.xlsx)
+   with the same sheet names; nothing else needs to change.
+------------------------------------------------------------------- */
+const _xlsxCache = {};
+function loadWorkbook(path) {
+  if (_xlsxCache[path]) return _xlsxCache[path];
+  _xlsxCache[path] = fetch(path)
+    .then(r => {
+      if (!r.ok) throw new Error(`Could not fetch ${path} (${r.status})`);
+      return r.arrayBuffer();
+    })
+    .then(buf => XLSX.read(buf, { type: 'array' }));
+  return _xlsxCache[path];
+}
+
+function sheetRows(wb, sheetName) {
+  const sheet = wb.Sheets[sheetName];
+  if (!sheet) return [];
+  return XLSX.utils.sheet_to_json(sheet, { defval: 0, raw: true });
+}
+
+/* The workbook's "Team" column is actually team+pitch-type-faced, e.g.
+   "dc_neutral", "csk_pace", "rr_spin". Split it into a clean franchise
+   code and a pitch-type facet so both are independently filterable. */
+const SIM_PITCH_TYPE_SUFFIXES = ['neutral', 'pace', 'spin'];
+function parseTeamPitchType(rawTeam) {
+  const s = String(rawTeam || '');
+  for (const suf of SIM_PITCH_TYPE_SUFFIXES) {
+    if (s.endsWith('_' + suf)) {
+      return { team: s.slice(0, -(suf.length + 1)).toUpperCase(), pitch_type: suf };
+    }
+  }
+  return { team: s.toUpperCase(), pitch_type: '' };
+}
+
+/* The 10 venues simulated, and the exact sheet names holding each one's
+   batting/bowling breakdown in the workbook. */
+const SIM_VENUES = [
+  'Mohali', 'Ekana', 'Chepauk', 'Hyderabad', 'Jaipur',
+  'Ahmedabad', 'Wankhede', 'Eden', 'Chinnaswamy', 'Delhi',
+];
+
+/* Build the full dataset for one discipline ('Batting' or 'Bowling'):
+   the league-wide sheet tagged venue:'All', plus every venue-specific
+   sheet tagged with its venue name — each row also gets a clean `team`
+   and `pitch_type` field split out of the raw "Team" column. Cached per
+   workbook+kind so repeated renders don't reparse the sheets. */
+const _sim100kCache = {};
+function build100kDataset(wb, kind) {
+  const cacheKey = kind;
+  if (_sim100kCache[cacheKey]) return _sim100kCache[cacheKey];
+
+  const tag = (rows, venue) => rows.map(r => {
+    const { team, pitch_type } = parseTeamPitchType(r.Team);
+    return { ...r, venue, team, pitch_type };
+  });
+
+  let all = tag(sheetRows(wb, `Overall ${kind}`), 'All');
+  SIM_VENUES.forEach(v => {
+    all = all.concat(tag(sheetRows(wb, `V_${v} ${kind === 'Batting' ? 'Bat' : 'Bowl'}`), v));
+  });
+
+  _sim100kCache[cacheKey] = all;
+  return all;
+}
+
+function debounce(fn, ms = 150) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/* ---------- generic sortable table renderer ---------- */
+function renderSortableTable(container, columns, rows, initialSortKey, initialDir = 'desc') {
+  let sortKey = initialSortKey;
+  let sortDir = initialDir;
+
+  function sortedRows() {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      return sortDir === 'asc'
+        ? String(av).localeCompare(String(bv))
+        : String(bv).localeCompare(String(av));
+    });
+    return copy;
+  }
+
+  function draw() {
+    const data = sortedRows();
+    const thead = columns.map(col => {
+      const cls = ['num-col-' + (col.num ? 'y' : 'n')];
+      if (col.key === sortKey) cls.push(sortDir === 'asc' ? 'sorted-asc' : 'sorted');
+      return `<th data-key="${col.key}" class="${col.num ? 'num ' : ''}${cls.join(' ')}">${col.label}</th>`;
+    }).join('');
+
+    const tbody = data.length ? data.map((row, i) => {
+      const cells = columns.map(col => {
+        let val = row[col.key];
+        if (col.format) val = col.format(val, row);
+        return `<td class="${col.num ? 'num' : ''} ${col.cellClass ? col.cellClass(row) : ''}">${val}</td>`;
+      }).join('');
+      return `<tr><td class="rank-cell num">${i + 1}</td>${cells}</tr>`;
+    }).join('') : `<tr><td colspan="${columns.length + 1}" class="empty-state">No rows match these filters.</td></tr>`;
+
+    container.innerHTML = `
+      <table>
+        <thead><tr><th class="num rank-cell">#</th>${thead}</tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    `;
+
+    container.querySelectorAll('thead th[data-key]').forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.key;
+        if (sortKey === key) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = key;
+          sortDir = 'desc';
+        }
+        draw();
+      });
+    });
+  }
+
+  draw();
+}
+
+/* ---------- fuzzy-ish name match, same idea as the bot's stats_alltime ---------- */
+function nameMatches(name, term) {
+  if (!name) return false;
+  return name.toLowerCase().includes(term.toLowerCase());
+}
+
+/* ---------- pull a sortable timestamp out of a match_id when date is blank ---------- */
+function matchTimestamp(row) {
+  if (row.date) {
+    const t = Date.parse(row.date);
+    if (!isNaN(t)) return t;
+  }
+  const m = String(row.match_id).match(/(\d{8})_(\d{6})$/);
+  if (m) {
+    const [, d, t] = m;
+    const iso = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
+    const parsed = Date.parse(iso);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function readableDate(ts) {
+  if (!ts) return 'undated';
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/* ------------------------------------------------------------------
+   Match-log filtering & aggregation
+   Every function below operates on rows from player_match_logs_odiwc.csv
+------------------------------------------------------------------- */
+
+function uniqueSorted(rows, key) {
+  const set = new Set();
+  rows.forEach(r => {
+    const v = r[key];
+    if (v !== undefined && v !== null && v !== '') set.add(String(v));
+  });
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function filterMatchRows(rows, f) {
+  return rows.filter(r => {
+    if (f.format && f.format !== 'All' && r.format !== f.format) return false;
+    if (f.venue && f.venue !== 'All' && r.venue !== f.venue) return false;
+    if (f.opponent && f.opponent !== 'All' && r.opponent !== f.opponent) return false;
+    if (f.team && f.team !== 'All' && r.team !== f.team) return false;
+    if (f.search && !nameMatches(r.player, f.search)) return false;
+    return true;
+  });
+}
+
+/* Aggregate batting figures per player from raw match-log rows.
+   "Batted" = a row where balls>0 or runs>0 (mirrors how the row is
+   populated when a player has no batting contribution at all). */
+function aggregateBatting(rows) {
+  const byPlayer = new Map();
+  rows.forEach(r => {
+    if (!r.player) return;
+    const runs = num(r.runs);
+    const balls = num(r.balls);
+    if (balls <= 0 && runs <= 0) return; // did not bat this match
+    const key = `${r.player}|${r.format || ''}`;
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        name: r.player, format: r.format || '', matches: 0, innings: 0, runs: 0, balls: 0, dismissals: 0,
+      });
+    }
+    const p = byPlayer.get(key);
+    p.matches += 1;
+    p.innings += 1;
+    p.runs += runs;
+    p.balls += balls;
+    if (r.out === 'Yes') p.dismissals += 1;
+  });
+  return [...byPlayer.values()].map(p => ({
+    ...p,
+    strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
+    avg_runs: p.innings > 0 ? p.runs / p.innings : 0,
+    not_outs: p.innings - p.dismissals,
+    average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
+  }));
+}
+
+/* Aggregate bowling figures per player from raw match-log rows.
+   "Bowled" = a row where overs>0 (mirrors having a bowling spell). */
+function aggregateBowling(rows) {
+  const byPlayer = new Map();
+  rows.forEach(r => {
+    if (!r.player) return;
+    const overs = num(r.overs);
+    const runsConceded = num(r.runs_conceded);
+    const wickets = num(r.wickets);
+    if (overs <= 0 && runsConceded <= 0 && wickets <= 0) return; // did not bowl
+    const key = `${r.player}|${r.format || ''}`;
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        name: r.player, format: r.format || '', matches: 0, overs: 0, runs_conceded: 0, wickets: 0,
+      });
+    }
+    const p = byPlayer.get(key);
+    p.matches += 1;
+    p.overs += overs;
+    p.runs_conceded += runsConceded;
+    p.wickets += wickets;
+  });
+  return [...byPlayer.values()].map(p => ({
+    ...p,
+    economy: p.overs > 0 ? p.runs_conceded / p.overs : 0,
+    bowling_average: p.wickets > 0 ? p.runs_conceded / p.wickets : 0,
+    bowling_sr: p.wickets > 0 ? (p.overs * 6) / p.wickets : 0,
+  }));
+}
+
+/* Group a player's own match rows by an arbitrary key (venue/opponent)
+   and return combined batting+bowling figures per group. Used for the
+   "matchup" breakdowns on the player page. */
+function aggregateByGroup(rows, groupKey) {
+  const byGroup = new Map();
+  rows.forEach(r => {
+    const g = r[groupKey];
+    if (!g) return;
+    if (!byGroup.has(g)) {
+      byGroup.set(g, {
+        group: g, matches: 0,
+        runs: 0, balls: 0, dismissals: 0, innings: 0,
+        wickets: 0, overs: 0, runs_conceded: 0,
+      });
+    }
+    const p = byGroup.get(g);
+    p.matches += 1;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls > 0 || runs > 0) {
+      p.innings += 1;
+      p.runs += runs;
+      p.balls += balls;
+      if (r.out === 'Yes') p.dismissals += 1;
+    }
+    const overs = num(r.overs), rc = num(r.runs_conceded), wkts = num(r.wickets);
+    if (overs > 0 || rc > 0 || wkts > 0) {
+      p.overs += overs;
+      p.runs_conceded += rc;
+      p.wickets += wkts;
+    }
+  });
+  return [...byGroup.values()].map(p => ({
+    ...p,
+    strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
+    average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
+    economy: p.overs > 0 ? p.runs_conceded / p.overs : 0,
+    bowling_average: p.wickets > 0 ? p.runs_conceded / p.wickets : 0,
+    bowling_sr: p.wickets > 0 ? (p.overs * 6) / p.wickets : 0,
+  })).sort((a, b) => b.matches - a.matches);
+}
+
+/* ------------------------------------------------------------------
+   Batter-vs-bowler matchup edge — mirrors the bot's own !matchup /
+   get_matchup_factors logic exactly (same baselines & thresholds),
+   so the "Edge" column here always agrees with what the bot says.
+   Below MATCHUP_MIN_BALLS the sample is treated as no data (neutral).
+------------------------------------------------------------------- */
+const MATCHUP_BASELINE_RPB = 1.30;        // league-average runs per ball
+const MATCHUP_BASELINE_OUT_RATE = 0.055;  // league-average dismissals per ball
+const MATCHUP_MIN_BALLS = 6;
+const MATCHUP_FULL_CONFIDENCE_BALLS = 30;
+
+function computeMatchupEdge(balls, runs, wickets) {
+  if (balls < MATCHUP_MIN_BALLS) return { label: '—', cls: '', runsFactor: 1, outFactor: 1 };
+
+  const rpb = runs / balls;
+  const outRate = wickets / balls;
+  const weight = Math.min(balls / MATCHUP_FULL_CONFIDENCE_BALLS, 1.0);
+
+  let runsDelta = (rpb / MATCHUP_BASELINE_RPB) - 1.0;
+  runsDelta = Math.max(-0.30, Math.min(0.30, runsDelta));
+  const runsFactor = 1.0 + weight * runsDelta;
+
+  let outDelta = (outRate / MATCHUP_BASELINE_OUT_RATE) - 1.0;
+  outDelta = Math.max(-0.40, Math.min(0.60, outDelta));
+  const outFactor = 1.0 + weight * outDelta;
+
+  let label, cls;
+  if (runsFactor > 1.02 || outFactor < 0.98) { label = 'Batter'; cls = 'pos-nrr'; }
+  else if (runsFactor < 0.98 || outFactor > 1.02) { label = 'Bowler'; cls = 'neg-nrr'; }
+  else { label = 'Even'; cls = ''; }
+
+  return { label, cls, runsFactor, outFactor };
+}
+
+/* ------------------------------------------------------------------
+   Records & milestones — all derived from the raw match log.
+------------------------------------------------------------------- */
+
+/* Per-player-per-format count of milestone innings/spells:
+   centuries, fifties, five-wicket hauls, three-wicket hauls. */
+function aggregateMilestones(rows) {
+  const byPlayer = new Map();
+  function bucket(player, format) {
+    const key = `${player}|${format || ''}`;
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        name: player, format: format || '',
+        centuries: 0, fifties: 0, fivefers: 0, threefers: 0,
+      });
+    }
+    return byPlayer.get(key);
+  }
+  rows.forEach(r => {
+    if (!r.player) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls > 0 || runs > 0) {
+      const p = bucket(r.player, r.format);
+      if (runs >= 100) p.centuries += 1;
+      else if (runs >= 50) p.fifties += 1;
+    }
+    const wickets = num(r.wickets), overs = num(r.overs), rc = num(r.runs_conceded);
+    if (overs > 0 || wickets > 0 || rc > 0) {
+      const p = bucket(r.player, r.format);
+      if (wickets >= 5) p.fivefers += 1;
+      else if (wickets >= 3) p.threefers += 1;
+    }
+  });
+  return [...byPlayer.values()];
+}
+
+/* Top N single-innings batting performances (qualified by a minimum
+   number of balls faced, so a lucky single ball doesn't rank). */
+function topIndividualScores(rows, n = 10, minBalls = 1) {
+  return rows
+    .filter(r => r.player && (num(r.balls) > 0 || num(r.runs) > 0) && num(r.balls) >= minBalls)
+    .map(r => ({
+      player: r.player, format: r.format, runs: num(r.runs), balls: num(r.balls),
+      strike_rate: num(r.balls) > 0 ? (num(r.runs) / num(r.balls)) * 100 : 0,
+      out: r.out, team: r.team, opponent: r.opponent, venue: r.venue,
+      ts: matchTimestamp(r),
+    }))
+    .sort((a, b) => b.runs - a.runs || b.strike_rate - a.strike_rate)
+    .slice(0, n);
+}
+
+/* Top N single-spell bowling figures (most wickets, tie-broken by
+   fewest runs conceded, then best economy). */
+function topBowlingFigures(rows, n = 10, minOvers = 0) {
+  return rows
+    .filter(r => r.player && (num(r.overs) > 0 || num(r.wickets) > 0 || num(r.runs_conceded) > 0))
+    .filter(r => num(r.overs) >= minOvers)
+    .map(r => ({
+      player: r.player, format: r.format, wickets: num(r.wickets),
+      runs_conceded: num(r.runs_conceded), overs: num(r.overs),
+      economy: num(r.overs) > 0 ? num(r.runs_conceded) / num(r.overs) : 0,
+      bowling_average: num(r.wickets) > 0 ? num(r.runs_conceded) / num(r.wickets) : 0,
+      bowling_sr: num(r.wickets) > 0 ? (num(r.overs) * 6) / num(r.wickets) : 0,
+      team: r.team, opponent: r.opponent, venue: r.venue, ts: matchTimestamp(r),
+    }))
+    .sort((a, b) => b.wickets - a.wickets || a.runs_conceded - b.runs_conceded)
+    .slice(0, n);
+}
+
+/* ------------------------------------------------------------------
+   Position analysis — runs by batting position (1-11), broken down by
+   venue, with a Total column. Position "0" in the log means the player
+   didn't bat, so it's excluded. Works for either the whole league or
+   a single player's rows, depending on what's passed in.
+------------------------------------------------------------------- */
+/* ------------------------------------------------------------------
+   Position analysis — comprehensive batting stats per position (1-11):
+   innings, runs, balls, average, strike rate, high score, 50s, 100s.
+   Venue is applied as a filter on `rows` before calling this (not a
+   column-per-venue breakdown), so the same table works whether you're
+   looking at one venue or all of them. Position "0" (didn't bat) is
+   excluded. Works for either the whole league or a single player's
+   rows, depending on what's passed in.
+------------------------------------------------------------------- */
+function aggregatePositionStats(rows) {
+  const byPos = new Map();
+
+  function bucket(pos) {
+    if (!byPos.has(pos)) {
+      byPos.set(pos, {
+        position: pos, innings: 0, runs: 0, balls: 0, dismissals: 0,
+        centuries: 0, fifties: 0, highScore: 0, highScoreOut: true,
+      });
+    }
+    return byPos.get(pos);
+  }
+
+  rows.forEach(r => {
+    const pos = num(r.position);
+    if (pos <= 0) return;
+    const runs = num(r.runs), balls = num(r.balls);
+    if (balls <= 0 && runs <= 0) return; // did not bat
+    const p = bucket(pos);
+    const out = r.out === 'Yes';
+    p.innings += 1;
+    p.runs += runs;
+    p.balls += balls;
+    if (out) p.dismissals += 1;
+    if (runs >= 100) p.centuries += 1;
+    else if (runs >= 50) p.fifties += 1;
+    // Track the best single innings at this position; prefer a not-out
+    // score over an out score of the same value (as usual in cricket).
+    if (runs > p.highScore || (runs === p.highScore && !out && p.highScoreOut)) {
+      p.highScore = runs;
+      p.highScoreOut = out;
+    }
+  });
+
+  return [...byPos.values()]
+    .map(p => ({
+      ...p,
+      average: p.dismissals > 0 ? p.runs / p.dismissals : p.runs,
+      strike_rate: p.balls > 0 ? (p.runs / p.balls) * 100 : 0,
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+/* Unique batting positions (1-11+) present in a set of match-log rows,
+   sorted ascending. Position "0" (didn't bat) is excluded. */
+function uniquePositions(rows) {
+  const set = new Set();
+  rows.forEach(r => {
+    const p = num(r.position);
+    if (p > 0) set.add(p);
+  });
+  return [...set].sort((a, b) => a - b);
+}
+
+/* ------------------------------------------------------------------
+   Reusable filter bar. Renders format / venue / opponent / search /
+   min-matches controls into `container` and calls onChange(filters)
+   whenever any control changes. Any of the `with*` options can be
+   omitted to hide that control.
+------------------------------------------------------------------- */
+function buildFilterBar(container, opts, onChange) {
+  const {
+    formats = [], venues = [], opponents = [], positions = [],
+    withFormat = true, withVenue = false, withOpponent = false, withPosition = false,
+    withSearch = true, withMinMatches = false,
+    minMatchesLabel = 'Min matches',
+    searchLabel = 'Search player',
+    searchPlaceholder = 'e.g. kohli, mhatre…',
+    searchSuggestions = null, // optional array of names -> renders a datalist for autocomplete
+    // Optional second independent search field (e.g. "Bowler" alongside a
+    // "Batter" primary search) -- lands in filters.search2. Off by default,
+    // purely additive, doesn't affect any existing page's filter bar.
+    withSearch2 = false,
+    search2Label = 'Search',
+    search2Placeholder = 'All',
+    search2Suggestions = null,
+    venueAllLabel = 'All venues (official totals)',
+    numericFilters = [],
+    // numericFilters: [{ key, label, placeholder }]
+    // each becomes a number input; value lands in filters.numeric[key]
+    // (null when left blank, i.e. "no threshold"). The caller's render
+    // function decides how to compare it (gte/lte/etc) against rows.
+    selects = [],
+    // selects: [{ key, label, options, allLabel }]
+    // a fully generic dropdown, value lands in filters[key]; 'options'
+    // is a plain array of strings, 'allLabel' (default 'All') is the
+    // label for the default/no-filter option, whose value is always 'All'.
+    exclusivePairs = [],
+    // exclusivePairs: [[keyA, keyB], ...] — when one select in a pair is
+    // set away from 'All', the other is forced back to 'All' and disabled,
+    // since the two facets can't be combined in this dataset (e.g. phase
+    // x strategy splits weren't simulated). Re-enabled once back to 'All'.
+    exclusiveNote = null, // optional line of text shown under the bar
+  } = opts;
+
+  const state = {
+    format: 'All', venue: 'All', opponent: 'All', position: 'All', search: '', search2: '', minMatches: 0,
+    numeric: {},
+  };
+  numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
+  selects.forEach(sel => { state[sel.key] = 'All'; });
+
+  const parts = [];
+
+  if (withSearch) {
+    const hasSuggestions = Array.isArray(searchSuggestions) && searchSuggestions.length > 0;
+    parts.push(`
+      <div class="filter-field filter-search">
+        <label>${searchLabel}</label>
+        <input type="text" id="f-search" placeholder="${searchPlaceholder}" autocomplete="off"${hasSuggestions ? ' list="f-search-list"' : ''}>
+        ${hasSuggestions ? `<datalist id="f-search-list">${searchSuggestions.map(n => `<option value="${n}">`).join('')}</datalist>` : ''}
+      </div>`);
+  }
+  if (withSearch2) {
+    const hasSuggestions2 = Array.isArray(search2Suggestions) && search2Suggestions.length > 0;
+    parts.push(`
+      <div class="filter-field filter-search">
+        <label>${search2Label}</label>
+        <input type="text" id="f-search2" placeholder="${search2Placeholder}" autocomplete="off"${hasSuggestions2 ? ' list="f-search2-list"' : ''}>
+        ${hasSuggestions2 ? `<datalist id="f-search2-list">${search2Suggestions.map(n => `<option value="${n}">`).join('')}</datalist>` : ''}
+      </div>`);
+  }
+  if (withFormat) {
+    parts.push(`
+      <div class="filter-field">
+        <label>Format</label>
+        <select id="f-format">
+          <option value="All">All formats</option>
+          ${formats.map(f => `<option value="${f}">${f}</option>`).join('')}
+        </select>
+      </div>`);
+  }
+  if (withVenue) {
+    parts.push(`
+      <div class="filter-field">
+        <label>Venue</label>
+        <select id="f-venue">
+          <option value="All">${venueAllLabel}</option>
+          ${venues.map(v => `<option value="${v}">${v}</option>`).join('')}
+        </select>
+      </div>`);
+  }
+  if (withPosition) {
+    parts.push(`
+      <div class="filter-field">
+        <label>Position</label>
+        <select id="f-position">
+          <option value="All">All positions</option>
+          ${positions.map(p => `<option value="${p}">${p}</option>`).join('')}
+        </select>
+      </div>`);
+  }
+  if (withOpponent) {
+    parts.push(`
+      <div class="filter-field">
+        <label>Opponent</label>
+        <input type="text" id="f-opponent" list="f-opponent-list" placeholder="All opponents" autocomplete="off">
+        <datalist id="f-opponent-list">
+          ${opponents.map(o => `<option value="${o}">`).join('')}
+        </datalist>
+      </div>`);
+  }
+  if (withMinMatches) {
+    parts.push(`
+      <div class="filter-field filter-narrow">
+        <label>${minMatchesLabel}</label>
+        <input type="number" id="f-min" min="0" step="1" value="0">
+      </div>`);
+  }
+
+  numericFilters.forEach(nf => {
+    parts.push(`
+      <div class="filter-field filter-narrow">
+        <label>${nf.label}</label>
+        <input type="number" id="f-num-${nf.key}" step="${nf.step || 'any'}" placeholder="${nf.placeholder || 'any'}">
+      </div>`);
+  });
+
+  selects.forEach(sel => {
+    parts.push(`
+      <div class="filter-field" id="f-field-${sel.key}">
+        <label>${sel.label}</label>
+        <select id="f-sel-${sel.key}">
+          <option value="All">${sel.allLabel || 'All'}</option>
+          ${sel.options.map(o => `<option value="${o}">${o}</option>`).join('')}
+        </select>
+      </div>`);
+  });
+
+  parts.push(`<button type="button" class="filter-reset" id="f-reset">Reset</button>`);
+
+  container.innerHTML = `<div class="filter-bar">${parts.join('')}</div>` +
+    (exclusiveNote ? `<p class="exclusive-note">${exclusiveNote}</p>` : '');
+
+  function fire() { onChange({ ...state }); }
+
+  if (withSearch) {
+    const el = container.querySelector('#f-search');
+    el.addEventListener('input', debounce(() => { state.search = el.value.trim(); fire(); }, 120));
+  }
+  if (withSearch2) {
+    const el = container.querySelector('#f-search2');
+    el.addEventListener('input', debounce(() => { state.search2 = el.value.trim(); fire(); }, 120));
+  }
+  if (withFormat) {
+    container.querySelector('#f-format').addEventListener('change', (e) => {
+      state.format = e.target.value; fire();
+    });
+  }
+  if (withVenue) {
+    container.querySelector('#f-venue').addEventListener('change', (e) => {
+      state.venue = e.target.value; fire();
+    });
+  }
+  if (withPosition) {
+    container.querySelector('#f-position').addEventListener('change', (e) => {
+      state.position = e.target.value; fire();
+    });
+  }
+  if (withOpponent) {
+    const el = container.querySelector('#f-opponent');
+    el.addEventListener('input', debounce(() => {
+      const v = el.value.trim();
+      state.opponent = v === '' ? 'All' : v; fire();
+    }, 150));
+  }
+  if (withMinMatches) {
+    const el = container.querySelector('#f-min');
+    el.addEventListener('input', debounce(() => {
+      state.minMatches = num(el.value); fire();
+    }, 150));
+  }
+
+  numericFilters.forEach(nf => {
+    const el = container.querySelector(`#f-num-${nf.key}`);
+    el.addEventListener('input', debounce(() => {
+      state.numeric[nf.key] = el.value.trim() === '' ? null : num(el.value);
+      fire();
+    }, 150));
+  });
+
+  // Generic selects, plus mutual-exclusion enforcement for any pair
+  // named in exclusivePairs (e.g. phase vs strategy).
+  function partnerKeyOf(key) {
+    for (const [a, b] of exclusivePairs) {
+      if (a === key) return b;
+      if (b === key) return a;
+    }
+    return null;
+  }
+  function setSelectLocked(key, locked) {
+    const el = container.querySelector(`#f-sel-${key}`);
+    const field = container.querySelector(`#f-field-${key}`);
+    if (!el) return;
+    el.disabled = locked;
+    if (field) field.classList.toggle('filter-locked', locked);
+  }
+
+  selects.forEach(sel => {
+    const el = container.querySelector(`#f-sel-${sel.key}`);
+    el.addEventListener('change', (e) => {
+      state[sel.key] = e.target.value;
+      const partner = partnerKeyOf(sel.key);
+      if (partner) {
+        if (e.target.value !== 'All') {
+          state[partner] = 'All';
+          const partnerEl = container.querySelector(`#f-sel-${partner}`);
+          if (partnerEl) partnerEl.value = 'All';
+          setSelectLocked(partner, true);
+        } else {
+          setSelectLocked(partner, false);
+        }
+      }
+      fire();
+    });
+  });
+
+  container.querySelector('#f-reset').addEventListener('click', () => {
+    state.format = 'All'; state.venue = 'All'; state.opponent = 'All'; state.position = 'All';
+    state.search = ''; state.search2 = ''; state.minMatches = 0;
+    numericFilters.forEach(nf => { state.numeric[nf.key] = null; });
+    selects.forEach(sel => { state[sel.key] = 'All'; setSelectLocked(sel.key, false); });
+    if (withSearch) container.querySelector('#f-search').value = '';
+    if (withSearch2) container.querySelector('#f-search2').value = '';
+    if (withFormat) container.querySelector('#f-format').value = 'All';
+    if (withVenue) container.querySelector('#f-venue').value = 'All';
+    if (withPosition) container.querySelector('#f-position').value = 'All';
+    if (withOpponent) container.querySelector('#f-opponent').value = '';
+    if (withMinMatches) container.querySelector('#f-min').value = 0;
+    numericFilters.forEach(nf => {
+      container.querySelector(`#f-num-${nf.key}`).value = '';
+    });
+    selects.forEach(sel => {
+      container.querySelector(`#f-sel-${sel.key}`).value = 'All';
+    });
+    fire();
+  });
+
+  return { getState: () => ({ ...state }) };
+}

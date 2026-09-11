@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>League Stats — Player Search</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">League <span class="brand-accent">Stats</span></div>
+    <nav class="mainnav">
+      <a href="index.html">Points Table</a>
+      <a href="batting.html">Batting</a>
+      <a href="bowling.html">Bowling</a>
+      <a href="records.html">Records</a>
+      <a href="player.html" class="active">Player Search</a>
+      <a href="positions.html">Player Position</a>
+      <a href="matchup.html">Matchup</a>
+      <a href="100k_batting.html">100k Batting</a>
+      <a href="100k_bowling.html">100k Bowling</a>
+      <a href="100k_matchup.html">100k Matchup</a>
+    </nav>
+  </div>
+</div>
+
+<main>
+  <h1>Player Search</h1>
+  <p class="page-lede">Type any part of a name — matches, career totals, and recent form.</p>
+
+  <div class="search-box">
+    <input type="text" id="search-input" placeholder="e.g. kohli, pandya, mhatre…" autocomplete="off">
+  </div>
+  <p class="search-hint" id="search-hint">Loading player data…</p>
+
+  <ul class="match-list" id="match-list"></ul>
+
+  <div id="player-filter-bar"></div>
+  <div id="player-card"></div>
+</main>
+
+<footer>Data refreshes automatically from the CSV files in /data — no manual rebuild needed.</footer>
+
+<script src="app.js?v=2"></script>
+<script>
+let battingRows = [];
+let bowlingRows = [];
+let matchRows = [];
+let allNames = [];
+
+async function init() {
+  const hint = document.getElementById('search-hint');
+  try {
+    [battingRows, bowlingRows, matchRows] = await Promise.all([
+      loadCSV(DATA.batting),
+      loadCSV(DATA.bowling),
+      loadCSV(DATA.matchlog),
+    ]);
+
+    const nameSet = new Set();
+    battingRows.forEach(r => r.name && nameSet.add(r.name));
+    bowlingRows.forEach(r => r.name && nameSet.add(r.name));
+    matchRows.forEach(r => r.player && nameSet.add(r.player));
+    allNames = [...nameSet].sort();
+
+    hint.textContent = `${allNames.length} players loaded. Start typing to search.`;
+  } catch (e) {
+    hint.textContent = 'Could not load player data — check the /data folder.';
+    console.error(e);
+  }
+}
+
+function showMatches(term) {
+  const list = document.getElementById('match-list');
+  list.innerHTML = '';
+  if (!term) return;
+
+  const matches = allNames.filter(n => nameMatches(n, term)).slice(0, 15);
+  if (matches.length === 0) {
+    list.innerHTML = '<li class="empty-state">No players found.</li>';
+    return;
+  }
+
+  matches.forEach(name => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="mname">${name}</span>`;
+    li.addEventListener('click', () => renderPlayer(name));
+    list.appendChild(li);
+  });
+
+  // auto-render if there's exactly one match
+  if (matches.length === 1) renderPlayer(matches[0]);
+}
+
+function renderPlayer(name) {
+  document.getElementById('match-list').innerHTML = '';
+  document.getElementById('search-input').value = name;
+
+  const allPlayerRows = matchRows.filter(r => r.player === name);
+  const formats = uniqueSorted(allPlayerRows, 'format');
+  const opponents = uniqueSorted(allPlayerRows, 'opponent');
+
+  const filterBarEl = document.getElementById('player-filter-bar');
+  buildFilterBar(filterBarEl, {
+    formats, opponents,
+    withFormat: formats.length > 1, withVenue: false, withOpponent: true,
+    withSearch: false, withMinMatches: true, minMatchesLabel: 'Min matches (splits)',
+  }, (filters) => renderPlayerCard(name, filters));
+
+  renderPlayerCard(name, { format: 'All', opponent: 'All', minMatches: 0 });
+}
+
+function renderPlayerCard(name, filters) {
+  const bat = battingRows.filter(r => r.name === name && (!filters.format || filters.format === 'All' || r.format === filters.format));
+  const bowl = bowlingRows.filter(r => r.name === name && (!filters.format || filters.format === 'All' || r.format === filters.format));
+
+  let scopedRows = matchRows.filter(r => r.player === name);
+  if (filters.format && filters.format !== 'All') scopedRows = scopedRows.filter(r => r.format === filters.format);
+  if (filters.opponent && filters.opponent !== 'All') scopedRows = scopedRows.filter(r => r.opponent === filters.opponent);
+
+  const recent = scopedRows
+    .map(r => ({ ...r, _ts: matchTimestamp(r) }))
+    .sort((a, b) => b._ts - a._ts)
+    .slice(0, 10);
+
+  const formats = [...new Set([...bat.map(r => r.format), ...bowl.map(r => r.format)])];
+
+  const battingStats = bat.map(r => {
+    const sr = r.balls > 0 ? (r.runs / r.balls) * 100 : 0;
+    const avg = r.innings > 0 ? r.runs / r.innings : 0;
+    return `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${r.runs}</div><div class="stat-label">Runs (${r.format})</div></div>
+        <div class="stat"><div class="stat-value">${sr.toFixed(1)}</div><div class="stat-label">Strike rate</div></div>
+        <div class="stat"><div class="stat-value">${avg.toFixed(1)}</div><div class="stat-label">Runs / innings</div></div>
+        <div class="stat"><div class="stat-value">${r.matches}</div><div class="stat-label">Matches</div></div>
+        <div class="stat"><div class="stat-value">${r.innings}</div><div class="stat-label">Innings</div></div>
+      </div>`;
+  }).join('');
+
+  const bowlingStats = bowl.filter(r => r.wickets > 0 || r.matches > 0).map(r => {
+    const econ = r.overs > 0 ? r.runs_conceded / r.overs : 0;
+    const avg = r.wickets > 0 ? r.runs_conceded / r.wickets : 0;
+    const sr = r.wickets > 0 ? (r.overs * 6) / r.wickets : 0;
+    return `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${r.wickets}</div><div class="stat-label">Wickets (${r.format})</div></div>
+        <div class="stat"><div class="stat-value">${econ.toFixed(2)}</div><div class="stat-label">Economy</div></div>
+        <div class="stat"><div class="stat-value">${r.wickets > 0 ? avg.toFixed(1) : '—'}</div><div class="stat-label">Bowling avg</div></div>
+        <div class="stat"><div class="stat-value">${r.wickets > 0 ? sr.toFixed(1) : '—'}</div><div class="stat-label">Bowling SR</div></div>
+        <div class="stat"><div class="stat-value">${Number(r.overs).toFixed(1)}</div><div class="stat-label">Overs</div></div>
+        <div class="stat"><div class="stat-value">${r.runs_conceded}</div><div class="stat-label">Runs conceded</div></div>
+        <div class="stat"><div class="stat-value">${r.matches}</div><div class="stat-label">Matches</div></div>
+      </div>`;
+  }).join('');
+
+  const recentRows = recent.map(r => {
+    const roleBits = [];
+    if (r.runs !== '' && r.runs !== null && r.balls > 0) {
+      roleBits.push(`${r.runs} (${r.balls})${r.out === 'No' ? '*' : ''}`);
+    }
+    if (r.wickets > 0 || r.overs > 0) {
+      roleBits.push(`${r.wickets}/${r.runs_conceded} in ${Number(r.overs).toFixed(1)} ov`);
+    }
+    return `
+      <tr>
+        <td>${readableDate(r._ts)}</td>
+        <td>${r.team} vs ${r.opponent}</td>
+        <td>${r.format}</td>
+        <td>${roleBits.join(' · ') || '—'}</td>
+      </tr>`;
+  }).join('');
+
+  // Venue and opponent splits, built live from every logged row for this
+  // player, scoped to the format/opponent filters and thresholded by
+  // min-matches so thin samples (one-off games at a ground) drop out.
+  const minM = filters.minMatches || 0;
+  const byVenue = aggregateByGroup(scopedRows, 'venue').filter(g => g.matches >= minM).slice(0, 10);
+
+  // Career milestones for this player, across the filtered matches.
+  const milestones = aggregateMilestones(scopedRows).reduce((acc, m) => ({
+    centuries: acc.centuries + m.centuries,
+    fifties: acc.fifties + m.fifties,
+    fivefers: acc.fivefers + m.fivefers,
+    threefers: acc.threefers + m.threefers,
+  }), { centuries: 0, fifties: 0, fivefers: 0, threefers: 0 });
+  const milestoneStats = (milestones.centuries || milestones.fifties || milestones.fivefers || milestones.threefers) ? `
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-value">${milestones.centuries}</div><div class="stat-label">100s</div></div>
+        <div class="stat"><div class="stat-value">${milestones.fifties}</div><div class="stat-label">50s</div></div>
+        <div class="stat"><div class="stat-value">${milestones.fivefers}</div><div class="stat-label">5-wkt hauls</div></div>
+        <div class="stat"><div class="stat-value">${milestones.threefers}</div><div class="stat-label">3-wkt hauls</div></div>
+      </div>` : '';
+
+  function splitTable(groups, emptyMsg) {
+    if (!groups.length) return `<p class="empty-state">${emptyMsg}</p>`;
+    const rows = groups.map(g => `
+      <tr>
+        <td>${g.group}</td>
+        <td class="num">${g.matches}</td>
+        <td class="num">${g.innings ? g.runs : '—'}</td>
+        <td class="num">${g.innings ? g.average.toFixed(1) : '—'}</td>
+        <td class="num">${g.balls ? g.strike_rate.toFixed(1) : '—'}</td>
+        <td class="num">${g.wickets ? g.wickets : '—'}</td>
+        <td class="num">${g.overs ? g.economy.toFixed(2) : '—'}</td>
+        <td class="num">${g.wickets ? g.bowling_average.toFixed(1) : '—'}</td>
+        <td class="num">${g.wickets ? g.bowling_sr.toFixed(1) : '—'}</td>
+      </tr>`).join('');
+    return `
+      <table>
+        <thead><tr><th></th><th class="num">M</th><th class="num">Runs</th><th class="num">Avg</th><th class="num">SR</th><th class="num">Wkts</th><th class="num">Econ</th><th class="num">Bowl Avg</th><th class="num">Bowl SR</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  const card = document.getElementById('player-card');
+  card.innerHTML = `
+    <div class="card">
+      <div class="player-head">
+        <h2>${name}</h2>
+        <div class="formats">${formats.join(' · ') || ''}</div>
+      </div>
+
+      ${battingStats ? `<div class="section-label">Career batting</div>${battingStats}` : ''}
+      ${bowlingStats ? `<div class="section-label">Career bowling</div>${bowlingStats}` : ''}
+      ${milestoneStats ? `<div class="section-label">Milestones</div>${milestoneStats}` : ''}
+
+      <div class="section-label">Recent matches</div>
+      ${recent.length ? `
+        <table>
+          <thead><tr><th>Date</th><th>Match</th><th>Format</th><th>Performance</th></tr></thead>
+          <tbody>${recentRows}</tbody>
+        </table>
+      ` : '<p class="empty-state">No logged matches match these filters.</p>'}
+
+      <div class="section-label">By venue <span class="section-note">(top 10 by matches)</span></div>
+      ${splitTable(byVenue, 'No venue data logged for this player.')}
+    </div>
+  `;
+}
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  showMatches(e.target.value.trim());
+});
+
+init();
+</script>
+
+</body>
+</html>
